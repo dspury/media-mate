@@ -309,6 +309,22 @@ class VerificationRecord(BaseModel):
     verified_at: datetime
 
 
+class VerificationSnapshotRecord(BaseModel):
+    """One row in the verification_snapshots table — a single file's recorded checksum.
+
+    The (folder, path) pair is unique; each folder has at most one row per file.
+    The snapshot for a folder is the set of all rows for that folder.
+    """
+
+    folder: str
+    path: str
+    checksum: str
+    size: int | None
+    mtime: float | None
+    algo: str
+    recorded_at: datetime
+
+
 __all__ = [
     "ChecksumAlgo",
     "FileRecord",
@@ -328,6 +344,7 @@ __all__ = [
     "RunStatus",
     "VerificationRecord",
     "VerificationReport",
+    "VerificationSnapshotRecord",
 ]
 
 

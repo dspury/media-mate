@@ -28,9 +28,10 @@ from media_mate.models import (
     RunRecord,
     RunStatus,
     VerificationRecord,
+    VerificationSnapshotRecord,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -123,6 +124,18 @@ CREATE TABLE IF NOT EXISTS organize_ops (
     moved_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS verification_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder TEXT NOT NULL,
+    path TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    size INTEGER,
+    mtime REAL,
+    algo TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    UNIQUE(folder, path)
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 CREATE INDEX IF NOT EXISTS idx_probes_file_id ON probes(file_id);
 CREATE INDEX IF NOT EXISTS idx_probes_run_id ON probes(run_id);
@@ -132,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_verifications_run_id ON verifications(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_organize_ops_run_id ON organize_ops(run_id);
 CREATE INDEX IF NOT EXISTS idx_organize_ops_source ON organize_ops(source_path);
+CREATE INDEX IF NOT EXISTS idx_verif_snap_folder ON verification_snapshots(folder);
 """
 
 
@@ -460,6 +474,57 @@ class LogStore:
                         probed_at=_parse_dt(row["probed_at"]) or datetime.now(timezone.utc),
                     )
         return result
+
+    # ------------------------------------------------------------------
+    # Verification snapshots
+    # ------------------------------------------------------------------
+
+    def replace_verification_snapshot(
+        self, folder: str, entries: list[VerificationSnapshotRecord]
+    ) -> None:
+        """Replace the entire snapshot for a folder atomically.
+
+        Deletes existing rows for the folder, then inserts the new ones.
+        All operations happen in a single transaction.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM verification_snapshots WHERE folder = ?", (folder,))
+            conn.executemany(
+                "INSERT INTO verification_snapshots (folder, path, checksum, size, "
+                "mtime, algo, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        e.folder,
+                        e.path,
+                        e.checksum,
+                        e.size,
+                        e.mtime,
+                        e.algo,
+                        _iso(e.recorded_at),
+                    )
+                    for e in entries
+                ],
+            )
+
+    def get_verification_snapshot(self, folder: str) -> list[VerificationSnapshotRecord]:
+        """Return all snapshot rows for a folder, ordered by path."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM verification_snapshots WHERE folder = ? ORDER BY path",
+                (folder,),
+            ).fetchall()
+        return [
+            VerificationSnapshotRecord(
+                folder=row["folder"],
+                path=row["path"],
+                checksum=row["checksum"],
+                size=row["size"],
+                mtime=row["mtime"],
+                algo=row["algo"],
+                recorded_at=_parse_dt(row["recorded_at"]) or datetime.now(timezone.utc),
+            )
+            for row in rows
+        ]
 
 
 __all__ = ["SCHEMA_VERSION", "LogStore"]
