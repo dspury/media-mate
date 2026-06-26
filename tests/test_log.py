@@ -1,0 +1,211 @@
+"""Tests for the SQLite audit log in log.py."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from media_mate.log import SCHEMA_VERSION, LogStore
+from media_mate.models import (
+    ProbeRecord,
+    ProjectRecord,
+    ProxyRecord,
+    RunStatus,
+    VerificationRecord,
+)
+
+
+@pytest.fixture
+def store(tmp_path) -> LogStore:
+    s = LogStore(tmp_path / "media-mate.db")
+    s.initialize()
+    return s
+
+
+class TestSchema:
+    def test_initialize_creates_db(self, store: LogStore, tmp_path) -> None:
+        assert (tmp_path / "media-mate.db").exists()
+
+    def test_schema_version_recorded(self, store: LogStore) -> None:
+        run = store.start_run("media-mate test")
+        assert run > 0  # just exercising the connection works
+        # verify schema_meta row
+        import sqlite3
+
+        with sqlite3.connect(store.db_path) as conn:
+            row = conn.execute(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == str(SCHEMA_VERSION)
+
+    def test_initialize_is_idempotent(self, tmp_path) -> None:
+        s = LogStore(tmp_path / "media-mate.db")
+        s.initialize()
+        s.initialize()  # second call must not raise
+        assert (tmp_path / "media-mate.db").exists()
+
+
+class TestRuns:
+    def test_start_run_returns_id(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate probe ./raw")
+        assert isinstance(run_id, int)
+        assert run_id > 0
+
+    def test_finish_run_marks_status(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate probe ./raw")
+        store.finish_run(run_id, RunStatus.SUCCESS)
+        record = store.get_run(run_id)
+        assert record is not None
+        assert record.status == RunStatus.SUCCESS
+        assert record.finished_at is not None
+
+    def test_finish_run_with_error(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate probe ./raw")
+        store.finish_run(run_id, RunStatus.FAILED, error="boom")
+        record = store.get_run(run_id)
+        assert record is not None
+        assert record.status == RunStatus.FAILED
+        assert record.error == "boom"
+
+    def test_get_run_missing_returns_none(self, store: LogStore) -> None:
+        assert store.get_run(99999) is None
+
+
+class TestFiles:
+    def test_upsert_file_creates_new(self, store: LogStore) -> None:
+        fid = store.upsert_file("/tmp/clip.mov", size=1024, mtime=12345.0)
+        assert fid > 0
+        record = store.get_file(fid)
+        assert record is not None
+        assert record.path == "/tmp/clip.mov"
+        assert record.size == 1024
+
+    def test_upsert_file_returns_existing_id(self, store: LogStore) -> None:
+        fid1 = store.upsert_file("/tmp/clip.mov")
+        fid2 = store.upsert_file("/tmp/clip.mov")
+        assert fid1 == fid2
+
+    def test_upsert_updates_last_seen_run(self, store: LogStore) -> None:
+        run1 = store.start_run("media-mate probe ./raw")
+        fid = store.upsert_file("/tmp/clip.mov", run_id=run1)
+        record = store.get_file(fid)
+        assert record is not None
+        assert record.first_seen_run == run1
+        assert record.last_seen_run == run1
+
+        run2 = store.start_run("media-mate probe ./raw")
+        store.upsert_file("/tmp/clip.mov", run_id=run2)
+        record2 = store.get_file(fid)
+        assert record2 is not None
+        assert record2.first_seen_run == run1  # unchanged
+        assert record2.last_seen_run == run2  # updated
+
+
+class TestProbes:
+    def test_insert_probe(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate probe ./raw")
+        file_id = store.upsert_file("/tmp/clip.mov", run_id=run_id)
+        now = datetime.now(timezone.utc)
+        pid = store.insert_probe(
+            ProbeRecord(
+                file_id=file_id,
+                run_id=run_id,
+                codec="h264",
+                container="mov",
+                width=1920,
+                height=1080,
+                frame_rate=23.976,
+                color_space="bt709",
+                bit_depth=8,
+                duration=120.5,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                probed_at=now,
+            )
+        )
+        assert pid > 0
+
+
+class TestProxies:
+    def test_insert_proxy(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate proxy ./raw")
+        file_id = store.upsert_file("/tmp/clip.mov", run_id=run_id)
+        pid = store.insert_proxy(
+            ProxyRecord(
+                source_file_id=file_id,
+                proxy_path="/tmp/proxy.mov",
+                run_id=run_id,
+                codec="ProRes422Proxy",
+                width=1920,
+                height=1080,
+                file_size=1048576,
+                generated_at=datetime.now(timezone.utc),
+            )
+        )
+        assert pid > 0
+
+
+class TestProjects:
+    def test_insert_project(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate resolve create ./raw")
+        pid = store.insert_project(
+            ProjectRecord(
+                name="Episode-12",
+                path="/tmp/Episode-12.drp",
+                run_id=run_id,
+                resolution="1080",
+                frame_rate="24",
+                color_space="Rec.709",
+                bin_count=5,
+                timeline_count=1,
+                resolve_version="20.0",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        assert pid > 0
+
+
+class TestVerifications:
+    def test_insert_verification(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate verify ./raw")
+        vid = store.insert_verification(
+            VerificationRecord(
+                folder="/tmp/raw",
+                run_id=run_id,
+                files_checked=10,
+                files_missing=0,
+                files_modified=0,
+                files_added=0,
+                checksum_algo="xxhash",
+                verified_at=datetime.now(timezone.utc),
+            )
+        )
+        assert vid > 0
+
+
+class TestContextManager:
+    def test_connection_closed_on_success(self, store: LogStore) -> None:
+        store.start_run("test")
+        # If context manager didn't close properly, the next call would block on lock.
+
+    def test_rollback_on_error(self, store: LogStore, tmp_path) -> None:
+        """A failing transaction must not leave partial state."""
+        import sqlite3
+
+        s = LogStore(tmp_path / "rollback.db")
+        s.initialize()
+
+        with pytest.raises(RuntimeError, match="simulated failure"), s._connect() as conn:
+            conn.execute(
+                "INSERT INTO runs (started_at, command, status) VALUES (?, ?, ?)",
+                ("2026-01-01T00:00:00", "x", "running"),
+            )
+            # Force an error mid-transaction
+            raise RuntimeError("simulated failure")
+
+        # After rollback, no runs should exist
+        with sqlite3.connect(s.db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            assert count == 0
