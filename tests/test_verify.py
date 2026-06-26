@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -389,7 +390,7 @@ class TestVerifyFolder:
 
 class TestSnapshotRecordModel:
     def test_construction(self) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         rec = VerificationSnapshotRecord(
             folder="/data",
@@ -398,14 +399,14 @@ class TestSnapshotRecordModel:
             size=1024,
             mtime=12345.0,
             algo="xxhash",
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         )
         assert rec.folder == "/data"
         assert rec.path == "/data/clip.mov"
         assert rec.checksum == "abc123"
 
     def test_log_roundtrip(self, store_dir: Path) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         store = _make_store(store_dir)
         rec = VerificationSnapshotRecord(
@@ -415,7 +416,7 @@ class TestSnapshotRecordModel:
             size=1024,
             mtime=12345.0,
             algo="xxhash",
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         )
         store.replace_verification_snapshot("/data", [rec])
         loaded = store.get_verification_snapshot("/data")
@@ -425,7 +426,7 @@ class TestSnapshotRecordModel:
         assert loaded[0].algo == "xxhash"
 
     def test_replace_deletes_old(self, store_dir: Path) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         store = _make_store(store_dir)
         old = VerificationSnapshotRecord(
@@ -435,7 +436,7 @@ class TestSnapshotRecordModel:
             size=1,
             mtime=0.0,
             algo="xxhash",
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         )
         new = VerificationSnapshotRecord(
             folder="/data",
@@ -444,7 +445,7 @@ class TestSnapshotRecordModel:
             size=2,
             mtime=0.0,
             algo="xxhash",
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         )
         store.replace_verification_snapshot("/data", [old])
         store.replace_verification_snapshot("/data", [new])

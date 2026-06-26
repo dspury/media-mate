@@ -1,0 +1,26 @@
+# media-mate configuration
+#
+# Copy this file to ./media-mate.toml or ~/.media-mate/config.toml and
+# customize. Any field can be omitted — defaults are shown as comments.
+
+# Where to find the ffmpeg and ffprobe binaries. If unset, the CLI looks
+# for them on PATH.
+# ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+# resolve_path = "/Applications/DaVinci Resolve.app"
+
+[organize]
+# Template for organized output. Placeholders:
+#   {root} {codec_family} {resolution_bucket} {filename} {ext} {date}
+template = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
+
+# What to do when the destination file already exists.
+# Options: skip (default) | overwrite | rename
+on_conflict = "skip"
+
+# Proxy generation defaults
+proxy_codec = "ProRes422Proxy"  # ProRes variant
+proxy_height = 1080             # target height (preserves aspect)
+
+# Checksum algorithm for verification
+# Options: xxhash (default, ~10x faster) | sha256
+checksum_algo = "xxhash"

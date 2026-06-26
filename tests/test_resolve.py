@@ -457,4 +457,3 @@ class TestCreateResolveProject:
         manifest_path = tmp_path / "test.drp.manifest.json"
         loaded = json.loads(manifest_path.read_text())
         assert len(loaded["timeline"]["clips"]) == 1
-

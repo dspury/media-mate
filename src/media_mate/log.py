@@ -16,7 +16,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from media_mate.models import (
@@ -152,8 +152,8 @@ CREATE INDEX IF NOT EXISTS idx_verif_snap_folder ON verification_snapshots(folde
 def _iso(dt: datetime) -> str:
     """Serialize a datetime as an ISO-8601 string in UTC."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat()
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -211,7 +211,7 @@ class LogStore:
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO runs (started_at, command, config_hash, status) VALUES (?, ?, ?, ?)",
-                (_iso(datetime.now(timezone.utc)), command, config_hash, RunStatus.RUNNING.value),
+                (_iso(datetime.now(UTC)), command, config_hash, RunStatus.RUNNING.value),
             )
             assert cur.lastrowid is not None
             return cur.lastrowid
@@ -226,7 +226,7 @@ class LogStore:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE runs SET finished_at = ?, status = ?, error = ? WHERE id = ?",
-                (_iso(datetime.now(timezone.utc)), status.value, error, run_id),
+                (_iso(datetime.now(UTC)), status.value, error, run_id),
             )
 
     def get_run(self, run_id: int) -> RunRecord | None:
@@ -237,7 +237,7 @@ class LogStore:
             return None
         return RunRecord(
             id=row["id"],
-            started_at=_parse_dt(row["started_at"]) or datetime.now(timezone.utc),
+            started_at=_parse_dt(row["started_at"]) or datetime.now(UTC),
             finished_at=_parse_dt(row["finished_at"]),
             command=row["command"],
             config_hash=row["config_hash"],
@@ -471,7 +471,7 @@ class LogStore:
                         duration=row["duration"],
                         audio_channels=row["audio_channels"],
                         audio_sample_rate=row["audio_sample_rate"],
-                        probed_at=_parse_dt(row["probed_at"]) or datetime.now(timezone.utc),
+                        probed_at=_parse_dt(row["probed_at"]) or datetime.now(UTC),
                     )
         return result
 
@@ -521,7 +521,7 @@ class LogStore:
                 size=row["size"],
                 mtime=row["mtime"],
                 algo=row["algo"],
-                recorded_at=_parse_dt(row["recorded_at"]) or datetime.now(timezone.utc),
+                recorded_at=_parse_dt(row["recorded_at"]) or datetime.now(UTC),
             )
             for row in rows
         ]

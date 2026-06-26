@@ -10,7 +10,7 @@ All models use pydantic v2 and are JSON-serializable out of the box.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 
-class RunStatus(str, Enum):
+class RunStatus(str, Enum):  # noqa: UP042
     """Status of a media-mate run."""
 
     RUNNING = "running"
@@ -31,7 +31,7 @@ class RunStatus(str, Enum):
     PARTIAL = "partial"
 
 
-class ChecksumAlgo(str, Enum):
+class ChecksumAlgo(str, Enum):  # noqa: UP042
     """Checksum algorithm used for backup verification."""
 
     XXHASH = "xxhash"
@@ -65,7 +65,7 @@ class MediaProbe(BaseModel):
     duration_seconds: float | None = None
     file_size_bytes: int | None = None
     modification_time: datetime | None = None
-    probed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    probed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ class ProxyResult(BaseModel):
     height: int
     file_size_bytes: int
     duration_seconds: float
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ class ResolveProjectResult(BaseModel):
     bin_count: int
     timeline_count: int
     resolve_version: str | None = None  # None when FFmpeg fallback was used
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ class VerificationReport(BaseModel):
     files_modified: int
     files_added: int
     checksum_algo: ChecksumAlgo
-    verified_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    verified_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     exit_code: int  # 0=clean, 1=missing, 2=modified, 3=added (combined if multiple)
 
     @property

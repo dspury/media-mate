@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -108,7 +108,7 @@ class TestProbes:
     def test_insert_probe(self, store: LogStore) -> None:
         run_id = store.start_run("media-mate probe ./raw")
         file_id = store.upsert_file("/tmp/clip.mov", run_id=run_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pid = store.insert_probe(
             ProbeRecord(
                 file_id=file_id,
@@ -142,7 +142,7 @@ class TestProxies:
                 width=1920,
                 height=1080,
                 file_size=1048576,
-                generated_at=datetime.now(timezone.utc),
+                generated_at=datetime.now(UTC),
             )
         )
         assert pid > 0
@@ -162,7 +162,7 @@ class TestProjects:
                 bin_count=5,
                 timeline_count=1,
                 resolve_version="20.0",
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
         )
         assert pid > 0
@@ -180,7 +180,7 @@ class TestVerifications:
                 files_modified=0,
                 files_added=0,
                 checksum_algo="xxhash",
-                verified_at=datetime.now(timezone.utc),
+                verified_at=datetime.now(UTC),
             )
         )
         assert vid > 0
@@ -197,7 +197,7 @@ class TestOrganizeOps:
                 codec_family="prores",
                 resolution_bucket="1080p",
                 file_size=1024,
-                moved_at=datetime.now(timezone.utc),
+                moved_at=datetime.now(UTC),
             )
         )
         assert oid > 0
@@ -224,7 +224,7 @@ class TestQueries:
                 duration=60.0,
                 audio_channels=2,
                 audio_sample_rate=48000,
-                probed_at=datetime.now(timezone.utc),
+                probed_at=datetime.now(UTC),
             )
         )
         # A later, different probe for the same file
@@ -243,7 +243,7 @@ class TestQueries:
                 duration=60.0,
                 audio_channels=2,
                 audio_sample_rate=48000,
-                probed_at=datetime.now(timezone.utc),
+                probed_at=datetime.now(UTC),
             )
         )
 
@@ -260,7 +260,7 @@ class TestQueries:
         run_id = store.start_run("probe batch")
         fid_a = store.upsert_file("/a.mov", run_id=run_id)
         fid_b = store.upsert_file("/b.mov", run_id=run_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for fid in (fid_a, fid_b):
             store.insert_probe(
                 ProbeRecord(

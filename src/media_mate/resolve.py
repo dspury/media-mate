@@ -28,7 +28,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -295,7 +295,7 @@ def create_resolve_project(
     output_path = Path(spec.output_path)
     proxy_dir_resolved = Path(proxy_dir) if proxy_dir else None
     cfg = config or MediaMateConfig()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if not source_folder.is_dir():
         raise ResolveError(f"source folder does not exist: {source_folder}")

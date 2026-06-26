@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +120,7 @@ def _parse_ffprobe_output(path: Path, raw: dict[str, Any]) -> MediaProbe:
     try:
         stat = path.stat()
         file_size = stat.st_size
-        mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
     except OSError:
         file_size = None
         mtime = None

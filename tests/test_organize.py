@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -133,7 +133,7 @@ class TestBuildDestinationPath:
             "h264",
             "1080p",
         )
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         assert dest == tmp_path / today / "clip.mov"
 
 
@@ -198,7 +198,7 @@ def _seed_probe(
             duration=60.0,
             audio_channels=2,
             audio_sample_rate=48000,
-            probed_at=datetime.now(timezone.utc),
+            probed_at=datetime.now(UTC),
         )
     )
 

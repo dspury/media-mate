@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from media_mate.log import LogStore
@@ -174,7 +174,7 @@ def generate_proxy(
         height=height,
         file_size_bytes=output.stat().st_size,
         duration_seconds=duration,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
     )
 
 

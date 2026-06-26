@@ -18,7 +18,7 @@ operation can be reversed in a future release.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from media_mate.log import LogStore
@@ -133,7 +133,7 @@ def build_destination_path(
         "resolution_bucket": bucket,
         "filename": source.stem,
         "ext": source.suffix,
-        "date": date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "date": date or datetime.now(UTC).strftime("%Y-%m-%d"),
     }
     return Path(template.format(**ctx))
 
@@ -180,7 +180,7 @@ def organize_path(
     source = Path(source)
     dest_root = Path(dest_root)
     cfg = (config or MediaMateConfig()).organize
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
 
     if not source.exists():
         raise OrganizeError(f"source path does not exist: {source}")
@@ -196,7 +196,7 @@ def organize_path(
             files_moved=0,
             files_skipped=0,
             bytes_moved=0,
-            duration_seconds=(datetime.now(timezone.utc) - started).total_seconds(),
+            duration_seconds=(datetime.now(UTC) - started).total_seconds(),
             dry_run=dry_run,
             errors=[],
         )
@@ -247,7 +247,7 @@ def organize_path(
                         codec_family=family,
                         resolution_bucket=bucket,
                         file_size=size,
-                        moved_at=datetime.now(timezone.utc),
+                        moved_at=datetime.now(UTC),
                     )
                 )
 
@@ -274,7 +274,7 @@ def organize_path(
         error_summary = f"{len(errors)} file(s) skipped: {head}"
     store.finish_run(run_id, status, error_summary)
 
-    duration = (datetime.now(timezone.utc) - started).total_seconds()
+    duration = (datetime.now(UTC) - started).total_seconds()
     return OrganizeResult(
         source_path=str(source),
         destination_root=str(dest_root),

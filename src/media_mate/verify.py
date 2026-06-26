@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import xxhash
@@ -139,7 +139,7 @@ def verify_folder(
 
     cfg = config or MediaMateConfig()
     algo = cfg.checksum_algo
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     folder_str = str(folder)
 
     # Get previous snapshot (path -> checksum)

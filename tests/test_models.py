@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -102,7 +102,7 @@ class TestOrganize:
             codec_family="prores",
             resolution_bucket="1080p",
             file_size=1024,
-            moved_at=datetime.now(timezone.utc),
+            moved_at=datetime.now(UTC),
         )
         assert r.id is None
         assert r.codec_family == "prores"
