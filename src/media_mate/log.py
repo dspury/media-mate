@@ -21,6 +21,7 @@ from pathlib import Path
 
 from media_mate.models import (
     FileRecord,
+    OrganizeOpRecord,
     ProbeRecord,
     ProjectRecord,
     ProxyRecord,
@@ -29,7 +30,7 @@ from media_mate.models import (
     VerificationRecord,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -111,6 +112,17 @@ CREATE TABLE IF NOT EXISTS verifications (
     verified_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS organize_ops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES runs(id),
+    source_path TEXT NOT NULL,
+    destination_path TEXT NOT NULL,
+    codec_family TEXT,
+    resolution_bucket TEXT,
+    file_size INTEGER,
+    moved_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 CREATE INDEX IF NOT EXISTS idx_probes_file_id ON probes(file_id);
 CREATE INDEX IF NOT EXISTS idx_probes_run_id ON probes(run_id);
@@ -118,6 +130,8 @@ CREATE INDEX IF NOT EXISTS idx_proxies_run_id ON proxies(run_id);
 CREATE INDEX IF NOT EXISTS idx_projects_run_id ON projects(run_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_run_id ON verifications(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_organize_ops_run_id ON organize_ops(run_id);
+CREATE INDEX IF NOT EXISTS idx_organize_ops_source ON organize_ops(source_path);
 """
 
 
@@ -372,6 +386,80 @@ class LogStore:
             )
             assert cur.lastrowid is not None
             return cur.lastrowid
+
+    # ------------------------------------------------------------------
+    # Organize ops
+    # ------------------------------------------------------------------
+
+    def insert_organize_op(self, record: OrganizeOpRecord) -> int:
+        """Insert an organize_op row; return its id."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO organize_ops (run_id, source_path, destination_path, "
+                "codec_family, resolution_bucket, file_size, moved_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record.run_id,
+                    record.source_path,
+                    record.destination_path,
+                    record.codec_family,
+                    record.resolution_bucket,
+                    record.file_size,
+                    _iso(record.moved_at),
+                ),
+            )
+            assert cur.lastrowid is not None
+            return cur.lastrowid
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def get_latest_probes_by_paths(self, paths: list[str]) -> dict[str, ProbeRecord]:
+        """Return a map of path -> latest ProbeRecord for each path in paths.
+
+        Paths not present in the audit log are silently omitted from the result.
+        """
+        if not paths:
+            return {}
+
+        result: dict[str, ProbeRecord] = {}
+        # Chunk to stay under SQLite's SQLITE_MAX_VARIABLE_NUMBER (often 999/32766).
+        chunk_size = 500
+        with self._connect() as conn:
+            for i in range(0, len(paths), chunk_size):
+                chunk = paths[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT f.path AS f_path, p.*
+                    FROM probes p
+                    JOIN files f ON p.file_id = f.id
+                    WHERE f.path IN ({placeholders})
+                      AND p.id = (
+                          SELECT MAX(p2.id) FROM probes p2 WHERE p2.file_id = f.id
+                      )
+                    """,
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    result[row["f_path"]] = ProbeRecord(
+                        id=row["id"],
+                        file_id=row["file_id"],
+                        run_id=row["run_id"],
+                        codec=row["codec"],
+                        container=row["container"],
+                        width=row["width"],
+                        height=row["height"],
+                        frame_rate=row["frame_rate"],
+                        color_space=row["color_space"],
+                        bit_depth=row["bit_depth"],
+                        duration=row["duration"],
+                        audio_channels=row["audio_channels"],
+                        audio_sample_rate=row["audio_sample_rate"],
+                        probed_at=_parse_dt(row["probed_at"]) or datetime.now(timezone.utc),
+                    )
+        return result
 
 
 __all__ = ["SCHEMA_VERSION", "LogStore"]

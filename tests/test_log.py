@@ -8,6 +8,7 @@ import pytest
 
 from media_mate.log import SCHEMA_VERSION, LogStore
 from media_mate.models import (
+    OrganizeOpRecord,
     ProbeRecord,
     ProjectRecord,
     ProxyRecord,
@@ -183,6 +184,104 @@ class TestVerifications:
             )
         )
         assert vid > 0
+
+
+class TestOrganizeOps:
+    def test_insert_organize_op(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate organize ./raw")
+        oid = store.insert_organize_op(
+            OrganizeOpRecord(
+                run_id=run_id,
+                source_path="/in/clip.mov",
+                destination_path="/out/prores/1080p/clip.mov",
+                codec_family="prores",
+                resolution_bucket="1080p",
+                file_size=1024,
+                moved_at=datetime.now(timezone.utc),
+            )
+        )
+        assert oid > 0
+
+
+class TestQueries:
+    def test_get_latest_probes_by_paths_empty(self, store: LogStore) -> None:
+        assert store.get_latest_probes_by_paths([]) == {}
+
+    def test_get_latest_probes_returns_latest(self, store: LogStore) -> None:
+        run1 = store.start_run("probe 1")
+        fid = store.upsert_file("/tmp/clip.mov", run_id=run1)
+        store.insert_probe(
+            ProbeRecord(
+                file_id=fid,
+                run_id=run1,
+                codec="h264",
+                container="mov",
+                width=1920,
+                height=1080,
+                frame_rate=24.0,
+                color_space="bt709",
+                bit_depth=8,
+                duration=60.0,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                probed_at=datetime.now(timezone.utc),
+            )
+        )
+        # A later, different probe for the same file
+        run2 = store.start_run("probe 2")
+        store.insert_probe(
+            ProbeRecord(
+                file_id=fid,
+                run_id=run2,
+                codec="h264",
+                container="mov",
+                width=3840,
+                height=2160,
+                frame_rate=30.0,
+                color_space="bt2020",
+                bit_depth=10,
+                duration=60.0,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                probed_at=datetime.now(timezone.utc),
+            )
+        )
+
+        results = store.get_latest_probes_by_paths(["/tmp/clip.mov"])
+        assert "/tmp/clip.mov" in results
+        assert results["/tmp/clip.mov"].height == 2160  # latest wins
+        assert results["/tmp/clip.mov"].frame_rate == 30.0
+
+    def test_get_latest_probes_omits_missing(self, store: LogStore) -> None:
+        results = store.get_latest_probes_by_paths(["/nonexistent/clip.mov"])
+        assert results == {}
+
+    def test_get_latest_probes_multiple_files(self, store: LogStore) -> None:
+        run_id = store.start_run("probe batch")
+        fid_a = store.upsert_file("/a.mov", run_id=run_id)
+        fid_b = store.upsert_file("/b.mov", run_id=run_id)
+        now = datetime.now(timezone.utc)
+        for fid in (fid_a, fid_b):
+            store.insert_probe(
+                ProbeRecord(
+                    file_id=fid,
+                    run_id=run_id,
+                    codec="h264",
+                    container="mov",
+                    width=1920,
+                    height=1080,
+                    frame_rate=24.0,
+                    color_space="bt709",
+                    bit_depth=8,
+                    duration=60.0,
+                    audio_channels=2,
+                    audio_sample_rate=48000,
+                    probed_at=now,
+                )
+            )
+
+        results = store.get_latest_probes_by_paths(["/a.mov", "/b.mov", "/c.mov"])
+        assert set(results.keys()) == {"/a.mov", "/b.mov"}
 
 
 class TestContextManager:

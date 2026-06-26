@@ -1,0 +1,296 @@
+"""Organize capability — auto-arrange media files into a structured folder layout.
+
+Public API:
+    codec_family(codec) -> str
+        Classify a codec name into a family bucket.
+    resolution_bucket(height) -> str
+        Classify a video height into a resolution bucket.
+    build_destination_path(template, dest_root, source, family, bucket) -> Path
+        Render an organize template to a destination Path.
+    organize_path(source, dest_root, store, config=None, dry_run=False) -> OrganizeResult
+        Move (or dry-run) files from source into dest_root based on probe data.
+
+Files without probe data in the audit log are skipped (run `media-mate probe`
+first to populate). Every move is recorded in the organize_ops table so the
+operation can be reversed in a future release.
+"""
+
+from __future__ import annotations
+
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+from media_mate.log import LogStore
+from media_mate.models import (
+    MediaMateConfig,
+    OrganizeOpRecord,
+    OrganizeResult,
+    RunStatus,
+)
+
+
+class OrganizeError(Exception):
+    """Raised when organize cannot proceed (e.g., bad source path)."""
+
+
+# ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
+
+
+_CODEC_FAMILY_MAP: dict[str, str] = {
+    # ProRes (ffprobe reports all ProRes variants as "prores")
+    "prores": "prores",
+    # H.264 / AVC
+    "h264": "h264",
+    "avc": "h264",
+    "avc1": "h264",
+    "avc3": "h264",
+    # H.265 / HEVC
+    "h265": "h265",
+    "hevc": "h265",
+    "hvc1": "h265",
+    "hev1": "h265",
+    # MPEG family
+    "mpeg2video": "mpeg",
+    "mpeg4": "mpeg",
+    "mjpeg": "mpeg",
+    # Modern codecs
+    "vp9": "modern",
+    "av1": "modern",
+    "theora": "modern",
+    # DNx family
+    "dnxhd": "dnx",
+    "dnxhr": "dnx",
+    # RAW camera formats
+    "rawvideo": "raw",
+    # Audio
+    "mp3": "audio",
+    "aac": "audio",
+    "flac": "audio",
+    "opus": "audio",
+    "vorbis": "audio",
+    "alac": "audio",
+    "pcm_s16le": "audio",
+    "pcm_s24le": "audio",
+    "pcm_s32le": "audio",
+    "pcm_f32le": "audio",
+}
+
+
+def codec_family(codec: str | None) -> str:
+    """Map a codec name to a coarse family bucket.
+
+    None -> "unknown". Recognized codecs -> family name. Unrecognized codecs
+    -> the lowercase codec name itself (preserves info for debugging).
+    """
+    if codec is None:
+        return "unknown"
+    return _CODEC_FAMILY_MAP.get(codec.lower(), codec.lower())
+
+
+def resolution_bucket(height: int | None) -> str:
+    """Map a video height to a coarse resolution bucket."""
+    if height is None or height <= 0:
+        return "unknown"
+    if height <= 480:
+        return "480p"
+    if height <= 720:
+        return "720p"
+    if height <= 1080:
+        return "1080p"
+    if height <= 1440:
+        return "1440p"
+    if height <= 2160:
+        return "4K"
+    if height <= 4320:
+        return "8K"
+    return f"{height}p"
+
+
+# ---------------------------------------------------------------------------
+# Path building
+# ---------------------------------------------------------------------------
+
+
+def build_destination_path(
+    template: str,
+    dest_root: Path,
+    source: Path,
+    family: str,
+    bucket: str,
+    date: str | None = None,
+) -> Path:
+    """Render an organize template to a destination Path.
+
+    Template placeholders: {root}, {codec_family}, {resolution_bucket},
+    {filename}, {ext}, {date}.
+    """
+    ctx = {
+        "root": str(dest_root),
+        "codec_family": family,
+        "resolution_bucket": bucket,
+        "filename": source.stem,
+        "ext": source.suffix,
+        "date": date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    }
+    return Path(template.format(**ctx))
+
+
+def _unique_path(dest: Path) -> Path:
+    """Return a non-colliding variant of dest by appending -1, -2, etc."""
+    if not dest.exists():
+        return dest
+    stem, suffix, parent = dest.stem, dest.suffix, dest.parent
+    n = 1
+    while True:
+        candidate = parent / f"{stem}-{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+# ---------------------------------------------------------------------------
+# Main public API
+# ---------------------------------------------------------------------------
+
+
+def organize_path(
+    source: Path,
+    dest_root: Path,
+    store: LogStore,
+    config: MediaMateConfig | None = None,
+    dry_run: bool = False,
+) -> OrganizeResult:
+    """Organize files from source into dest_root.
+
+    Files are classified by codec family and resolution bucket using probe
+    data already in the audit log. Files without probe data are skipped
+    (with the reason recorded in errors); the user should run probe first.
+
+    Each move is recorded in organize_ops so the operation can be reversed
+    in a future release.
+
+    Run status:
+        - SUCCESS: all probed files moved successfully
+        - PARTIAL: some moved, some skipped (no probe / conflict / OSError)
+        - FAILED: nothing moved
+    """
+    source = Path(source)
+    dest_root = Path(dest_root)
+    cfg = (config or MediaMateConfig()).organize
+    started = datetime.now(timezone.utc)
+
+    if not source.exists():
+        raise OrganizeError(f"source path does not exist: {source}")
+    if not source.is_dir():
+        raise OrganizeError(f"source is not a directory: {source}")
+
+    files = sorted(p for p in source.rglob("*") if p.is_file())
+
+    if not files:
+        return OrganizeResult(
+            source_path=str(source),
+            destination_root=str(dest_root),
+            files_moved=0,
+            files_skipped=0,
+            bytes_moved=0,
+            duration_seconds=(datetime.now(timezone.utc) - started).total_seconds(),
+            dry_run=dry_run,
+            errors=[],
+        )
+
+    # Look up probe data for all files in one query
+    probes = store.get_latest_probes_by_paths([str(f) for f in files])
+
+    command = f"media-mate organize {source} --root {dest_root}"
+    run_id = store.start_run(command)
+
+    files_moved = 0
+    files_skipped = 0
+    bytes_moved = 0
+    errors: list[str] = []
+
+    for f in files:
+        try:
+            size = f.stat().st_size  # capture before move
+
+            probe = probes.get(str(f))
+            if probe is None:
+                files_skipped += 1
+                errors.append(f"{f.name}: no probe data — run `media-mate probe` first")
+                continue
+
+            family = codec_family(probe.codec)
+            bucket = resolution_bucket(probe.height)
+            dest = build_destination_path(cfg.template, dest_root, f, family, bucket)
+
+            # Conflict handling
+            if dest.exists():
+                if cfg.on_conflict == "skip":
+                    files_skipped += 1
+                    errors.append(f"{f.name}: destination already exists, skipping")
+                    continue
+                if cfg.on_conflict == "rename":
+                    dest = _unique_path(dest)
+                # "overwrite" falls through and shutil.move will overwrite
+
+            if not dry_run:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(f), str(dest))
+                store.insert_organize_op(
+                    OrganizeOpRecord(
+                        run_id=run_id,
+                        source_path=str(f),
+                        destination_path=str(dest),
+                        codec_family=family,
+                        resolution_bucket=bucket,
+                        file_size=size,
+                        moved_at=datetime.now(timezone.utc),
+                    )
+                )
+
+            files_moved += 1
+            bytes_moved += size
+
+        except OSError as e:
+            files_skipped += 1
+            errors.append(f"{f.name}: {e}")
+
+    # Determine run status
+    if files_moved == 0 and files_skipped > 0:
+        status = RunStatus.FAILED
+    elif files_moved > 0 and files_skipped > 0:
+        status = RunStatus.PARTIAL
+    else:
+        status = RunStatus.SUCCESS
+
+    error_summary: str | None = None
+    if errors:
+        head = "; ".join(errors[:5])
+        if len(errors) > 5:
+            head += f"; ... ({len(errors) - 5} more)"
+        error_summary = f"{len(errors)} file(s) skipped: {head}"
+    store.finish_run(run_id, status, error_summary)
+
+    duration = (datetime.now(timezone.utc) - started).total_seconds()
+    return OrganizeResult(
+        source_path=str(source),
+        destination_root=str(dest_root),
+        files_moved=files_moved,
+        files_skipped=files_skipped,
+        bytes_moved=bytes_moved,
+        duration_seconds=duration,
+        dry_run=dry_run,
+        errors=errors,
+    )
+
+
+__all__ = [
+    "OrganizeError",
+    "build_destination_path",
+    "codec_family",
+    "organize_path",
+    "resolution_bucket",
+]

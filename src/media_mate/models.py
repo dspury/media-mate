@@ -73,35 +73,41 @@ class MediaProbe(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class OrganizeRule(BaseModel):
-    """A single organize rule: maps a folder-template to a codec family/resolution bucket.
+class OrganizeConfig(BaseModel):
+    """Top-level organize configuration.
 
-    Templates use Python str.format placeholders:
-        {root}, {codec_family}, {resolution_bucket}, {filename}, {ext}, {date}
+    Template placeholders: {root}, {codec_family}, {resolution_bucket},
+    {filename}, {ext}, {date}.
     """
 
-    model_config = ConfigDict(frozen=True)
-
-    codec_family: str
-    resolution_bucket: str
     template: str = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
-
-
-class OrganizeConfig(BaseModel):
-    """Top-level organize configuration."""
-
-    rules: list[OrganizeRule] = Field(default_factory=list)
-    default_template: str = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
+    on_conflict: Literal["skip", "overwrite", "rename"] = "skip"
 
 
 class OrganizeResult(BaseModel):
     """Output of running organize on a folder."""
 
     source_path: str
-    destination_path: str
+    destination_root: str
     files_moved: int
+    files_skipped: int
     bytes_moved: int
     duration_seconds: float
+    dry_run: bool
+    errors: list[str] = Field(default_factory=list)
+
+
+class OrganizeOpRecord(BaseModel):
+    """One row in the organize_ops table — a single file move during organize."""
+
+    id: int | None = None
+    run_id: int
+    source_path: str
+    destination_path: str
+    codec_family: str | None
+    resolution_bucket: str | None
+    file_size: int | None
+    moved_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +315,8 @@ __all__ = [
     "MediaMateConfig",
     "MediaProbe",
     "OrganizeConfig",
+    "OrganizeOpRecord",
     "OrganizeResult",
-    "OrganizeRule",
     "ProbeRecord",
     "ProjectRecord",
     "ProxyRecord",

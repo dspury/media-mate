@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -12,7 +12,8 @@ from media_mate.models import (
     MediaMateConfig,
     MediaProbe,
     OrganizeConfig,
-    OrganizeRule,
+    OrganizeOpRecord,
+    OrganizeResult,
     ProxyRequest,
     ResolveProjectSpec,
     RunStatus,
@@ -69,14 +70,42 @@ class TestMediaProbe:
 class TestOrganize:
     def test_default_config(self) -> None:
         cfg = OrganizeConfig()
-        assert cfg.rules == []
-        assert "{codec_family}" in cfg.default_template
+        assert "{codec_family}" in cfg.template
+        assert cfg.on_conflict == "skip"
 
-    def test_rule_construction(self) -> None:
-        rule = OrganizeRule(codec_family="prores", resolution_bucket="1080p")
-        assert rule.codec_family == "prores"
-        assert rule.resolution_bucket == "1080p"
-        assert "{filename}" in rule.template
+    def test_custom_template(self) -> None:
+        cfg = OrganizeConfig(template="{root}/{filename}{ext}")
+        assert cfg.template == "{root}/{filename}{ext}"
+
+    def test_invalid_on_conflict_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            OrganizeConfig(on_conflict="delete_everything")  # type: ignore[arg-type]
+
+    def test_organize_result_defaults(self) -> None:
+        r = OrganizeResult(
+            source_path="/in",
+            destination_root="/out",
+            files_moved=5,
+            files_skipped=1,
+            bytes_moved=1000,
+            duration_seconds=1.5,
+            dry_run=False,
+        )
+        assert r.errors == []
+        assert r.files_moved == 5
+
+    def test_organize_op_record(self) -> None:
+        r = OrganizeOpRecord(
+            run_id=1,
+            source_path="/in/clip.mov",
+            destination_path="/out/prores/1080p/clip.mov",
+            codec_family="prores",
+            resolution_bucket="1080p",
+            file_size=1024,
+            moved_at=datetime.now(timezone.utc),
+        )
+        assert r.id is None
+        assert r.codec_family == "prores"
 
 
 class TestMediaMateConfig:
