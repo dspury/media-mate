@@ -7,36 +7,39 @@
 
 > Zero-cost CLI for post-production media ops: probe, organize, generate proxies, build DaVinci Resolve projects, and verify backups.
 
-media-mate is a sharp little tool for the boring-but-critical infrastructure underneath video post-production. Every operation writes to a local SQLite audit log so you can answer "what happened to my media?" without guessing.
+media-mate is a sharp little tool for the boring-but-critical infrastructure underneath video post-production. Every operation writes to a local SQLite audit log so you can answer *"what happened to my media?"* without guessing.
 
 - **Probe** any media file or folder → structured metadata (codec, resolution, audio, color)
 - **Organize** a folder into a structured layout by codec family and resolution bucket
 - **Generate** ProRes 422 Proxy (or any ProRes variant) for editing
 - **Create** DaVinci Resolve projects programmatically — or fall back to a manifest if Resolve isn't available
 - **Verify** folder integrity with fast checksums (xxhash or sha256) — designed for cron
+- **Orchestrate** all of the above in one command with the `run` pipeline
 
 No API keys. No cloud. No SaaS. Just FFmpeg, your local SQLite, and (optionally) DaVinci Resolve.
 
 ---
 
-## Quickstart
+## See it in action
 
-```bash
-# Install (requires Python 3.11+, FFmpeg on PATH)
-pip install media-mate
+```
+$ media-mate run ./raw/ --organize --proxy --resolve-project --verify --project-name "Episode-12"
 
-# Probe a folder of media
-media-mate probe ./raw/
+Step 1: probe
+  Probed 4 file(s)
+Step 2: organize
+  Moved 4, skipped 0
+Step 3: proxy
+  Generated 4 proxy file(s)
+Step 4: resolve-project
+  Created Resolve project (v20.0)
+Step 5: verify
+  Clean: 4 file(s) verified
 
-# Organize + generate proxies + create a Resolve project + verify
-media-mate run ./raw/ --organize --proxy --resolve-project --verify \
-    --project-name "Episode-12"
-
-# Query the audit log
-media-mate log
+Done.
 ```
 
-That's it. Every command writes to a local SQLite database at `~/.media-mate/media-mate.db`.
+A full walkthrough with screenshots, folder layouts, and audit-log output is in [`examples/WALKTHROUGH.md`](./examples/WALKTHROUGH.md).
 
 ---
 
@@ -72,26 +75,28 @@ Every command writes to the audit log so you can trace any operation back to wha
 - **FFmpeg** with `ffprobe` on `$PATH` (or pointed at via config)
 - **DaVinci Resolve Studio** (free tier is fine) — only required for the `resolve create` command; everything else works without it
 
-### Install from PyPI
-
-```bash
-pip install media-mate
-media-mate --version
-```
-
 ### Install from source
 
 ```bash
 git clone https://github.com/dspury/relay-dept-products.git
 cd relay-dept-products/products/media-mate
 pip install -e ".[dev]"
+
+media-mate --version
+```
+
+### Install via pip
+
+```bash
+pip install media-mate
+media-mate --version
 ```
 
 ### Verify the install
 
 ```bash
 media-mate --help
-media-mate --version
+media-mate probe --help
 ```
 
 If `media-mate` isn't on your PATH after pip install, check `python -m site --user-site` and make sure it's on PATH, or use `pipx install media-mate` for an isolated install.
@@ -99,6 +104,15 @@ If `media-mate` isn't on your PATH after pip install, check `python -m site --us
 ---
 
 ## Usage
+
+### Quick start — try it now
+
+The [`examples/`](./examples/) folder contains a minimal test dataset and a run script so you can see media-mate working immediately, no real media files required.
+
+```bash
+cd examples/
+./run-demo.sh
+```
 
 ### `probe`
 
@@ -110,17 +124,17 @@ media-mate probe clip.mov
 media-mate probe ./raw/
 ```
 
-Output (truncated for clarity):
+Output:
 
 ```
 Probed 5 file(s)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ File                              ┃ Codec  ┃ Resolution   ┃ Duration ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ /Users/me/raw/clip.mov            │ h264   │ 1920x1080    │ 60.0s    │
-│ /Users/me/raw/sub2/b-roll.mov     │ prores │ 1920x1080    │ 32.5s    │
-│ ...                               │        │              │          │
-└───────────────────────────────────┴───────┴──────────────┴──────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ File                      ┃ Codec ┃ Resolution  ┃ Duration ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ raw/clip.mov              │ h264  │ 1920x1080  │ 60.0s   │
+│ raw/sub/b-roll.mov        │ prores│ 1920x1080  │ 32.5s   │
+│ ...                       │       │            │          │
+└───────────────────────────┴───────┴────────────┴──────────┘
 ```
 
 ### `organize`
@@ -139,8 +153,7 @@ Default layout: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Customiz
 # Defaults: ProRes 422 Proxy at 1080p
 media-mate proxy ./raw/ --out ./proxies/
 
-# Custom codec + height
-# (configured via media-mate.toml)
+# Custom codec + height (configured via media-mate.toml)
 ```
 
 The output directory mirrors the source's subpath layout. If a proxy already exists at the output path, it's skipped (no overwrite).
@@ -256,19 +269,6 @@ The log is the system of record — you can back it up, copy it between machines
 
 ---
 
-## Troubleshooting
-
-**`ffmpeg not found` / `ffprobe not found`**
-Install FFmpeg: `brew install ffmpeg` (macOS), `apt-get install ffmpeg` (Debian/Ubuntu), or set `ffmpeg_path` in `media-mate.toml`.
-
-**`media-mate resolve create` writes a manifest instead of creating the project**
-Resolve isn't running or the scripting API isn't on `PYTHONPATH`. See [DaVinci Resolve scripting docs](https://www.blackmagicdesign.com/developer/product/davinci-resolve) — set `resolve_path` in `media-mate.toml` to your Resolve installation root.
-
-**Permission denied on the audit log**
-By default the DB lives at `~/.media-mate/media-mate.db`. Make sure that directory is writable, or pass `--db <other-path>`.
-
----
-
 ## Architecture
 
 See [`docs/architecture.md`](./docs/architecture.md) for the full architecture write-up: capabilities, data flow, SQLite schema, and how to extend.
@@ -326,7 +326,5 @@ mypy src
 MIT — see [`LICENSE`](./LICENSE).
 
 ---
-
-## Acknowledgments
 
 media-mate is part of the [relay-dept-products](https://github.com/dspury/relay-dept-products) catalog of free open-source tools. It's designed to be useful on its own and composes nicely with other tools in the catalog.
