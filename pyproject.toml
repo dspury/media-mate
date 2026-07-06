@@ -59,9 +59,9 @@ dev = [
 media-mate = "media_mate.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/dspury/relay-dept-products/tree/main/products/media-mate"
-Source = "https://github.com/dspury/relay-dept-products/tree/main/products/media-mate"
-Issues = "https://github.com/dspury/relay-dept-products/issues"
+Homepage = "https://github.com/dspury/media-mate"
+Source = "https://github.com/dspury/media-mate"
+Issues = "https://github.com/dspury/media-mate/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/media_mate"]

@@ -1,9 +1,9 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.1.3-blue)](https://github.com/dspury/relay-dept-products/tree/main/products/media-mate)
+[![Version](https://img.shields.io/badge/version-0.1.3-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![CI](https://github.com/dspury/relay-dept-products/actions/workflows/media-mate.yml/badge.svg)](https://github.com/dspury/relay-dept-products/actions/workflows/media-mate.yml)
+[![CI](https://github.com/dspury/media-mate/actions/workflows/media-mate.yml/badge.svg)](https://github.com/dspury/media-mate/actions/workflows/media-mate.yml)
 
 > Zero-cost CLI for post-production media ops: probe, organize, generate proxies, build DaVinci Resolve projects, and verify backups.
 
@@ -79,8 +79,8 @@ Every command writes to the audit log so you can trace any operation back to wha
 ### Install from source
 
 ```bash
-git clone https://github.com/dspury/relay-dept-products.git
-cd relay-dept-products/products/media-mate
+git clone https://github.com/dspury/media-mate.git
+cd media-mate
 pip install -e ".[dev]"
 
 media-mate --version
@@ -320,13 +320,13 @@ What's planned for future versions:
 
 ## Contributing
 
-media-mate is open source under the MIT license. Contributions welcome — open an issue or PR on [GitHub](https://github.com/dspury/relay-dept-products/tree/main/products/media-mate).
+media-mate is open source under the MIT license. Contributions welcome — open an issue or PR on [GitHub](https://github.com/dspury/media-mate).
 
 Development setup:
 
 ```bash
-git clone https://github.com/dspury/relay-dept-products.git
-cd relay-dept-products/products/media-mate
+git clone https://github.com/dspury/media-mate.git
+cd media-mate
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -348,4 +348,4 @@ MIT — see [`LICENSE`](./LICENSE).
 
 ---
 
-media-mate is part of the [relay-dept-products](https://github.com/dspury/relay-dept-products) catalog of free open-source tools. It's designed to be useful on its own and composes nicely with other tools in the catalog.
+media-mate is part of the media-mate catalog of free open-source tools. It's designed to be useful on its own and composes nicely with other tools in the catalog.
