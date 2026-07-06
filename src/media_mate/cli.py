@@ -453,4 +453,5 @@ def run_cmd(
 def tui(ctx: click.Context) -> None:
     """Launch the interactive TUI (alternative to subcommands)."""
     from media_mate.tui import main as tui_main
+
     tui_main()

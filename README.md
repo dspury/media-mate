@@ -62,6 +62,7 @@ media-mate is built for the operator who runs a small-to-medium video team, does
 | `verify` | Compute checksums for every file in a folder; on subsequent runs, report what changed (added / modified / missing) with structured exit codes. |
 | `log` | Query the audit log: recent runs, with text or JSON output. |
 | `run` | Pipeline orchestration: probe (always) + optional organize/proxy/resolve-project/verify. |
+| `tui` | Full-screen interactive TUI — alternative to subcommands; animated progress, live log, log browser. |
 
 Every command writes to the audit log so you can trace any operation back to what the filesystem looked like at the time.
 
@@ -221,6 +222,23 @@ media-mate run ./raw/ \
 
 Step order is fixed: probe (always) → organize → proxy → resolve-project → verify. Each step is independent; skip any combination you don't need.
 
+### `tui` (interactive TUI)
+
+For ad-hoc use, launch the full-screen Textual TUI instead of typing subcommands:
+
+```bash
+media-mate tui
+```
+
+The TUI has four screens:
+
+- **Home** — system status: ffmpeg version, db location, run counts
+- **Pipeline** — enter a folder path, toggle which steps to run, watch animated progress with a live log
+- **Log** — browse the audit log in a sortable table, color-coded by status
+- **Settings** — view current config: proxy codec/height, checksum algo, Resolve path
+
+All four screens are also reachable via keyboard shortcut or mouse from the home menu.
+
 ---
 
 ## Configuration
@@ -271,7 +289,9 @@ The log is the system of record — you can back it up, copy it between machines
 
 ## Architecture
 
-See [`docs/architecture.md`](./docs/architecture.md) for the full architecture write-up: capabilities, data flow, SQLite schema, and how to extend.
+See [`SPEC.md`](./SPEC.md) for the full write-up: goals, capabilities, data flow, SQLite schema, and how to extend.
+
+**Stale archived docs** (superseded by SPEC.md) are kept at [`docs/archive/`](./docs/archive/) but excluded from version control via `.gitignore`.
 
 ---
 
@@ -281,6 +301,7 @@ See [`docs/architecture.md`](./docs/architecture.md) for the full architecture w
 
 What works in `0.1.0`:
 - All six core capabilities (probe, organize, proxy, resolve, verify, run/log)
+- Interactive Textual TUI (`media-mate tui`) — home, pipeline runner, log browser, settings
 - Local SQLite audit log with full schema
 - Click CLI with --help, --version, --db, --config
 - media-mate.toml configuration with full defaults

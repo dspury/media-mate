@@ -235,7 +235,8 @@ media-mate run ./raw/ --organize --proxy --resolve-project --verify
 | Component | Choice | License | Cost |
 |---|---|---|---|
 | Language | Python 3.11+ | PSF | Free |
-| CLI framework | Click (or Typer — TBD during build) | BSD / MIT | Free |
+| CLI framework | Click + Rich (TTY output) | BSD / MIT | Free |
+| TUI framework | Textual (full-screen TUI, `media-mate tui`) | MIT | Free |
 | Media probe | ffprobe (via ffmpeg) | LGPL/GPL | Free |
 | Transcode / proxy | ffmpeg | LGPL/GPL | Free |
 | Checksum | xxhash (python-xxhash) | BSD | Free |
@@ -348,12 +349,14 @@ Plus a smoke test that runs `media-mate --help` and a small end-to-end probe of 
 
 ---
 
-## 15. Open questions (TBD during build, not blocking spec)
+## 15. Open questions — resolved during build
 
-1. **Click vs Typer.** Click is more mature; Typer has nicer modern ergonomics. Default to Click unless D objects.
-2. **Checksum algo default.** xxhash is ~10x faster than sha256 and fine for non-cryptographic verification. Document the trade-off in the README.
-3. **Default organize rule.** The spec proposes codec family + resolution bucket. Do you want date in the path too?
-4. **Sample demo media.** D will provide a small synthetic clip for the README/examples. (Will be generated if not provided.)
+These were TBD at spec time and resolved during implementation:
+
+1. **Click vs Typer.** → **Click.** Chosen for its maturity, stable API, and rich output ecosystem (Rich). Typer rejected.
+2. **Checksum algo default.** → **xxhash.** Implemented as default; sha256 available as opt-in. Speed difference is real and meaningful for large folders.
+3. **Default organize rule.** → **codec_family + resolution_bucket.** Date rejected — it creates messy paths for multi-day shoots. The two-tier structure is clean and professional.
+4. **Sample demo media.** → **FFmpeg testsrc synthetic clips.** Five 2-second clips (h264 + ProRes, mixed resolutions) generated with `ffmpeg -f lavfi -i testsrc`. No real media needed.
 
 ---
 
@@ -370,26 +373,30 @@ Plus a smoke test that runs `media-mate --help` and a small end-to-end probe of 
 
 ---
 
-## 17. Build order (post-approval)
+## 17. Build order — completed
 
-1. Scaffold `products/media-mate/` (pyproject.toml, src layout, tests/, ruff config)
-2. CI workflow at relay-dept-products root with paths-filter
-3. `models.py` + `log.py` (the data layer everything else depends on)
-4. `probe.py` + tests (simplest capability, validates the pipeline)
-5. `organize.py` + tests (depends on probe)
-6. `proxy.py` + tests (depends on probe)
-7. `verify.py` + tests (independent)
-8. `resolve.py` + tests (most complex, integrate last)
-9. `cli.py` (wires it all together)
-10. README + examples + docs
-11. Update relay-dept-products README to add media-mate row
-12. Tag `0.1.0`, publish to PyPI
+All items shipped in v0.1.0:
+
+1. ✅ Scaffold `products/media-mate/` (pyproject.toml, src layout, tests/, ruff config)
+2. ✅ CI workflow at relay-dept-products root with paths-filter
+3. ✅ `models.py` + `log.py` (the data layer everything else depends on)
+4. ✅ `probe.py` + tests (simplest capability, validates the pipeline)
+5. ✅ `organize.py` + tests (depends on probe)
+6. ✅ `proxy.py` + tests (depends on probe)
+7. ✅ `verify.py` + tests (independent)
+8. ✅ `resolve.py` + tests (most complex, integrate last)
+9. ✅ `cli.py` (wires it all together)
+10. ✅ README + examples + docs
+11. ✅ relay-dept-products README updated
+12. ⚠️ Tag `0.1.0`, publish to PyPI — **Skipped.** GitHub release only; PyPI publish deferred.
 
 **Estimated build time:** ~1 focused session for v1, plus iteration. Probably 3–5 working sessions to ship-quality.
 
 ---
 
 ## 18. What you sign off on by approving this doc
+
+All items below were approved at spec time and shipped in v0.1.0:
 
 - Scope as defined in §5
 - Non-goals as defined in §4
@@ -403,4 +410,4 @@ Plus a smoke test that runs `media-mate --help` and a small end-to-end probe of 
 - Name: `media-mate`
 - First tagged version: `0.1.0`
 
-Approve → I scaffold the project under `relay-dept-products/products/media-mate/`, wire CI at the catalog root, and start with §17 step 1.
+Shipped as approved ✓

@@ -13,18 +13,15 @@ from the worker thread so the TUI stays responsive.
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import subprocess
-from datetime import datetime
 from pathlib import Path
+from typing import Any, ClassVar
 
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.color import Color
 from textual.containers import Container, Horizontal, Vertical
-from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import Screen
 from textual.theme import Theme
@@ -32,8 +29,6 @@ from textual.widgets import (
     Button,
     Checkbox,
     DataTable,
-    Footer,
-    Header,
     Input,
     Label,
     Log,
@@ -108,9 +103,7 @@ def get_run_counts(db: Path) -> tuple[int, int, int, int]:
     if not db.exists():
         return 0, 0, 0, 0
     with sqlite3.connect(db) as conn:
-        rows = dict(conn.execute(
-            "SELECT status, COUNT(*) FROM runs GROUP BY status"
-        ).fetchall())
+        rows = dict(conn.execute("SELECT status, COUNT(*) FROM runs GROUP BY status").fetchall())
     total = sum(rows.values())
     return (
         total,
@@ -124,7 +117,8 @@ def get_run_counts(db: Path) -> tuple[int, int, int, int]:
 # HomeScreen
 # ---------------------------------------------------------------------------
 
-class HomeScreen(Screen):
+
+class HomeScreen(Screen[Any]):
     CSS = """
     HomeScreen {
         align: center middle;
@@ -202,7 +196,8 @@ class HomeScreen(Screen):
 # PipelineScreen
 # ---------------------------------------------------------------------------
 
-class PipelineScreen(Screen):
+
+class PipelineScreen(Screen[Any]):
     path_value = reactive("")
     running = reactive(False)
 
@@ -289,19 +284,19 @@ class PipelineScreen(Screen):
         log_area = self.query_one("#log-area", Log)
 
         steps: list[tuple[str, str]] = [
-            ("probe",    "Probe — extract metadata"),
+            ("probe", "Probe — extract metadata"),
             ("organize", "Organize — sort media"),
-            ("proxy",    "Proxy — generate proxies"),
-            ("verify",   "Verify — checksum audit"),
+            ("proxy", "Proxy — generate proxies"),
+            ("verify", "Verify — checksum audit"),
         ]
         enabled = [
             (name, label)
             for name, label in steps
             if (
-                (name == "probe"    and self.query_one("#chk-probe",    Checkbox).value)
+                (name == "probe" and self.query_one("#chk-probe", Checkbox).value)
                 or (name == "organize" and self.query_one("#chk-organize", Checkbox).value)
-                or (name == "proxy"    and self.query_one("#chk-proxy",    Checkbox).value)
-                or (name == "verify"   and self.query_one("#chk-verify",   Checkbox).value)
+                or (name == "proxy" and self.query_one("#chk-proxy", Checkbox).value)
+                or (name == "verify" and self.query_one("#chk-verify", Checkbox).value)
             )
         ]
         total = len(enabled) or 1
@@ -310,8 +305,8 @@ class PipelineScreen(Screen):
         log_area.write(f"[cyan]▶ Starting pipeline on[/cyan]  {path}")
 
         # Import here so the TUI can start even if these fail to import
-        from media_mate.probe import probe_path
         from media_mate.organize import organize_path
+        from media_mate.probe import probe_path
         from media_mate.proxy import generate_proxies
         from media_mate.verify import verify_folder
 
@@ -386,7 +381,8 @@ class PipelineScreen(Screen):
 # LogScreen
 # ---------------------------------------------------------------------------
 
-class LogScreen(Screen):
+
+class LogScreen(Screen[Any]):
     CSS = """
     LogScreen {
         align: center middle;
@@ -426,8 +422,7 @@ class LogScreen(Screen):
         with sqlite3.connect(DEFAULT_DB) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT id, started_at, status, command FROM runs "
-                "ORDER BY id DESC LIMIT 200"
+                "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 200"
             ).fetchall()
 
         for row in rows:
@@ -461,7 +456,8 @@ class LogScreen(Screen):
 # SettingsScreen
 # ---------------------------------------------------------------------------
 
-class SettingsScreen(Screen):
+
+class SettingsScreen(Screen[Any]):
     CSS = """
     SettingsScreen {
         align: center middle;
@@ -514,8 +510,9 @@ class SettingsScreen(Screen):
 # ErrorDialog  (factory function — simpler than a full class)
 # ---------------------------------------------------------------------------
 
-def _error_dialog(message: str) -> Screen:
-    class ErrorDialog(Screen):
+
+def _error_dialog(message: str) -> Screen[Any]:
+    class ErrorDialog(Screen[Any]):
         CSS = """
         ErrorDialog { align: center middle; }
         #dialog {
@@ -526,13 +523,16 @@ def _error_dialog(message: str) -> Screen:
             padding: 2 3;
         }
         """
+
         def compose(self) -> ComposeResult:
             with Container(id="dialog"):
                 yield Static(f"[red]![/red]  {message}", id="err-msg")
                 yield Button("OK", id="btn-ok")
+
         @on(Button.Pressed, "#btn-ok")
         def on_ok(self) -> None:
             self.app.pop_screen()
+
     return ErrorDialog()
 
 
@@ -540,19 +540,20 @@ def _error_dialog(message: str) -> Screen:
 # MediaMateApp
 # ---------------------------------------------------------------------------
 
-class MediaMateApp(App):
+
+class MediaMateApp(App[Any]):
     TITLE = "media-mate"
     SUB_TITLE = f"v{__version__}"
-    THEMES = [MM_THEME]
-    BINDINGS = [
+    THEMES: ClassVar = [MM_THEME]
+    BINDINGS: ClassVar = [
         Binding("q", "quit", "Quit", show=True),
         Binding("escape", "pop_screen", "Back", show=True),
     ]
-    SCREENS = {
-        "home":      HomeScreen,
-        "pipeline":  PipelineScreen,
-        "log":       LogScreen,
-        "settings":  SettingsScreen,
+    SCREENS: ClassVar = {
+        "home": HomeScreen,
+        "pipeline": PipelineScreen,
+        "log": LogScreen,
+        "settings": SettingsScreen,
     }
 
     def on_mount(self) -> None:
@@ -562,6 +563,7 @@ class MediaMateApp(App):
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     app = MediaMateApp()
