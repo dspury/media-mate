@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-0.1.3-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![CI](https://github.com/dspury/media-mate/actions/workflows/media-mate.yml/badge.svg)](https://github.com/dspury/media-mate/actions/workflows/media-mate.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
 
 > Zero-cost CLI for post-production media ops: probe, organize, generate proxies, build DaVinci Resolve projects, and verify backups.
 
