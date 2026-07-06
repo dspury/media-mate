@@ -1,6 +1,6 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/dspury/relay-dept-products/tree/main/products/media-mate)
+[![Version](https://img.shields.io/badge/version-0.1.3-blue)](https://github.com/dspury/relay-dept-products/tree/main/products/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/dspury/relay-dept-products/actions/workflows/media-mate.yml/badge.svg)](https://github.com/dspury/relay-dept-products/actions/workflows/media-mate.yml)
@@ -297,9 +297,9 @@ See [`SPEC.md`](./SPEC.md) for the full write-up: goals, capabilities, data flow
 
 ## Status
 
-**Beta (`0.1.0`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.0 → 0.1.1) are autonomous; minor bumps (0.1.0 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
+**Beta (`0.1.3`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
 
-What works in `0.1.0`:
+What works in `0.1.3`:
 - All six core capabilities (probe, organize, proxy, resolve, verify, run/log)
 - Interactive Textual TUI (`media-mate tui`) — home, pipeline runner, log browser, settings
 - Local SQLite audit log with full schema
