@@ -28,7 +28,7 @@ The killer demo: drop a folder of raw media in, run `media-mate run`, and walk a
 ## 3. Goals
 
 1. **Zero cost to run.** Every dependency is open-source or free. No API keys, no cloud accounts, no paid SaaS.
-2. **Single-operator CLI.** Sharp tool, well-styled terminal output, no web UI in v1.
+2. **Single-operator CLI + TUI.** Sharp CLI for scripting and automation; interactive Textual TUI (`media-mate tui`) for ad-hoc use. No web UI.
 3. **Composable pipeline.** Each capability (probe / organize / proxy / resolve / verify) is independent and can be run standalone or chained.
 4. **Auditable by default.** Every operation writes to a local SQLite log. The log is the system of record for "what happened to my media."
 5. **Safe to open-source.** No hardcoded paths, hostnames, NAS shares, IPs, or proprietary references anywhere.
@@ -44,7 +44,7 @@ The killer demo: drop a folder of raw media in, run `media-mate run`, and walk a
 | Transcription (Whisper) | Out of media-management scope; product is infrastructure, not creative AI |
 | LLM-based content description | Same reason |
 | Auto-selects / scoring | Creative-AI territory, not infrastructure |
-| Web UI | Single-operator CLI in v1; UI is a v2+ concern |
+| Web UI | CLI + TUI in v1; browser UI is a v2+ concern |
 | Cloud APIs (any vendor) | Zero-cost mandate; local-first mandate |
 | Team collaboration features | Single-operator scope |
 | Auto-tagging / ML classification | Out of scope for v1; v2 candidate |
@@ -77,27 +77,29 @@ Every operation writes to a local SQLite database (`~/.media-mate/media-mate.db`
 ---
 
 ## 6. Architecture
-
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                       media-mate CLI                         │
-│                  (Click or Typer, rich output)               │
-└──────┬─────────┬─────────┬─────────┬─────────┬───────────────┘
-       │         │         │         │         │
-       ▼         ▼         ▼         ▼         ▼
-   ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌─────────┐
-   │ Probe │ │Organiz│ │Proxy  │ │Resolve│ │ Verify  │
-   │       │ │  e    │ │ Gen   │ │ Create│ │         │
-   └───┬───┘ └───┬───┘ └───┬───┘ └───┬───┘ └────┬────┘
-       │         │         │         │           │
-       │       ffprobe    ffmpeg   Resolve.py   xxhash
-       │         │         │         │  (or     │
-       │         │         │         │   ffmpeg │
-       │         │         │         │ fallback)│
-       │         │         │         │          │
-       └─────────┴────┬────┴─────────┴──────────┘
-                     │
-                     ▼
+│                   media-mate CLI + TUI                       │
+│            (Click for CLI; Textual for TUI)                 │
+│                                                               │
+│    CLI:   media-mate probe / organize / proxy / verify ... │
+│    TUI:   media-mate tui   (interactive full-screen app)   │
+└──────┬──────────┬──────────┬──────────┬───────────┬──────────┘
+       │          │          │          │           │
+       ▼          ▼          ▼          ▼           ▼
+   ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌─────────┐
+   │ Probe │  │Organiz│  │Proxy  │  │Resolve│  │ Verify  │
+   │       │  │  e    │  │ Gen   │  │ Create│  │         │
+   └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘  └────┬────┘
+       │          │          │          │            │
+       │        ffprobe    ffmpeg   Resolve.py    xxhash
+       │          │          │          │  (or      │
+       │          │          │          │   ffmpeg  │
+       │          │          │          │ fallback) │
+       │          │          │          │           │
+       └──────────┴────┬─────┴──────────┴───────────┘
+                       │
+                       ▼
             ┌─────────────────┐
             │  SQLite Audit   │
             │     Log         │
@@ -106,7 +108,7 @@ Every operation writes to a local SQLite database (`~/.media-mate/media-mate.db`
             └─────────────────┘
 ```
 
-Each box is a Python module with its own tests. The CLI composes them.
+Each box is a Python module with its own tests. The CLI and TUI both compose them.
 
 ---
 
