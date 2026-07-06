@@ -22,3 +22,6 @@ build/
 
 # Archived docs (superseded by SPEC.md and README.md)
 /docs/archive/
+
+# Demo pipeline output — regenerated on each run
+examples/test-dataset/output/
