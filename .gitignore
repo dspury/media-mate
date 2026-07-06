@@ -1,0 +1,24 @@
+# Byte-compiled / optimized Python files
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# pip editable install artifacts
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Archived docs (superseded by SPEC.md and README.md)
+/docs/archive/
