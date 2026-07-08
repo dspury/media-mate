@@ -133,9 +133,6 @@ class HomeScreen(Screen[Any]):
     }
     #logo-box Static {
         color: $secondary;
-        font-family: "Courier New", Courier, monospace;
-        font-size: 9;
-        line-height: 110%;
     }
     #menu {
         width: 52;
@@ -239,7 +236,7 @@ class PipelineScreen(Screen[Any]):
             yield Vertical(
                 Checkbox("Probe — extract metadata", True, id="chk-probe"),
                 Checkbox("Organize — sort by codec / resolution", id="chk-organize"),
-                Checkbox("Proxy — generate H.264 edit proxies", id="chk-proxy"),
+                Checkbox("Proxy — generate ProRes edit proxies", id="chk-proxy"),
                 Checkbox("Verify — checksum audit", id="chk-verify"),
                 id="step-col",
             )
