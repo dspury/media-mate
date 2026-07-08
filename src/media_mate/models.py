@@ -142,6 +142,25 @@ class ProxyResult(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ProxyFailure(BaseModel):
+    """One file that failed (or was refused) during a proxy batch."""
+
+    source_path: str
+    reason: str
+
+
+class ProxyBatchResult(BaseModel):
+    """Output of running proxy generation on a folder.
+
+    skipped lists non-video files excluded from the batch (subtitles,
+    sidecar databases, ...) — they are not failures.
+    """
+
+    results: list[ProxyResult] = Field(default_factory=list)
+    failures: list[ProxyFailure] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Resolve models
 # ---------------------------------------------------------------------------
@@ -336,6 +355,8 @@ __all__ = [
     "OrganizeResult",
     "ProbeRecord",
     "ProjectRecord",
+    "ProxyBatchResult",
+    "ProxyFailure",
     "ProxyRecord",
     "ProxyRequest",
     "ProxyResult",

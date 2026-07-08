@@ -1,6 +1,6 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/dspury/media-mate)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
@@ -57,7 +57,7 @@ media-mate is built for the operator who runs a small-to-medium video team, does
 |---|---|
 | `probe` | Run `ffprobe` on every file in a folder; capture codec, resolution, frame rate, color space, audio, duration, size, mtime. |
 | `organize` | Re-arrange files into a structured layout (default: `<root>/<codec_family>/<resolution_bucket>/<filename>`) based on probe data. |
-| `proxy` | Generate ProRes 422 Proxy (or any ProRes variant) at 1080p via `ffmpeg`. Aspect-preserving. |
+| `proxy` | Generate ProRes 422 Proxy (or any ProRes variant) at 1080p via `ffmpeg`. Aspect-preserving; always outputs `.mov`, skips non-video files. |
 | `resolve create` | Programmatically create a DaVinci Resolve project. Falls back to a JSON manifest when Resolve isn't available. |
 | `verify` | Compute checksums for every file in a folder; on subsequent runs, report what changed (added / modified / missing) with structured exit codes. |
 | `log` | Query the audit log: recent runs, with text or JSON output. |
@@ -299,9 +299,9 @@ See [`SPEC.md`](./SPEC.md) for the full write-up: goals, capabilities, data flow
 
 ## Status
 
-**Beta (`0.2.0`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
+**Beta (`0.2.1`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
 
-What works in `0.2.0`:
+What works in `0.2.1`:
 - All six core capabilities (probe, organize, proxy, resolve, verify, run/log)
 - Interactive Textual TUI (`media-mate tui`) — home, pipeline runner, log browser, settings
 - Local SQLite audit log with full schema

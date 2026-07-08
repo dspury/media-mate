@@ -321,20 +321,27 @@ class PipelineScreen(Screen[Any]):
                         log_area.write(f"  [green]✓[/green]  probed {len(results)} file(s)")
 
                     elif step == "organize":
-                        root = path / "organized"
+                        root = path.parent / f"{path.name}-output" / "organized"
                         result = organize_path(path, root, store, config=cfg)
-                        moved = result.files_moved
+                        copied = result.files_moved
                         skipped = result.files_skipped
+                        verb = "moved" if cfg.organize.mode == "move" else "copied"
                         log_area.write(
-                            f"  [green]✓[/green]  moved [b]{moved}[/b] file(s)"
+                            f"  [green]✓[/green]  {verb} [b]{copied}[/b] file(s)"
                             + (f", skipped {skipped}" if skipped else "")
                         )
 
                     elif step == "proxy":
-                        proxy_dir = path / "proxies"
-                        presults = generate_proxies(path, proxy_dir, store, config=cfg)
+                        proxy_dir = path.parent / f"{path.name}-output" / "proxies"
+                        pbatch = generate_proxies(path, proxy_dir, store, config=cfg)
                         log_area.write(
-                            f"  [green]✓[/green]  generated [b]{len(presults)}[/b] proxy file(s)"
+                            f"  [green]✓[/green]  generated "
+                            f"[b]{len(pbatch.results)}[/b] proxy file(s)"
+                            + (
+                                f", [red]{len(pbatch.failures)} failed[/red]"
+                                if pbatch.failures
+                                else ""
+                            )
                         )
 
                     elif step == "verify":

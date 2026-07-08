@@ -287,9 +287,10 @@ class TestGenerateProxies:
         out = tmp_path / "out"
         store = _make_store(store_dir)
 
-        results = generate_proxies(empty, out, store)
+        batch = generate_proxies(empty, out, store)
 
-        assert results == []
+        assert batch.results == []
+        assert batch.failures == []
         # No run created for empty source
         assert _count_rows(store, "runs") == 0
 
@@ -307,9 +308,9 @@ class TestGenerateProxies:
             patch("media_mate.proxy._probe_output_metadata") as mock_probe,
         ):
             mock_probe.return_value = (1920, 1080, 60.0)
-            results = generate_proxies(src, out, store)
+            batch = generate_proxies(src, out, store)
 
-        assert len(results) == 1
+        assert len(batch.results) == 1
         assert (out / "clip.mov").exists()
         assert _count_rows(store, "proxies") == 1
         assert _latest_run_status(store)[0] == "success"
@@ -332,9 +333,9 @@ class TestGenerateProxies:
             patch("media_mate.proxy._probe_output_metadata") as mock_probe,
         ):
             mock_probe.return_value = (1920, 1080, 60.0)
-            results = generate_proxies(src, out, store)
+            batch = generate_proxies(src, out, store)
 
-        assert len(results) == 2
+        assert len(batch.results) == 2
         # Relative subpath preserved
         assert (out / "a.mov").exists()
         assert (out / "sub" / "b.mov").exists()
@@ -351,9 +352,11 @@ class TestGenerateProxies:
 
         store = _make_store(store_dir)
 
-        results = generate_proxies(src, out, store)
+        batch = generate_proxies(src, out, store)
 
-        assert results == []
+        assert batch.results == []
+        assert len(batch.failures) == 1
+        assert "already exists" in batch.failures[0].reason
         status, error = _latest_run_status(store)
         assert status == "failed"
         assert error is not None
@@ -380,9 +383,10 @@ class TestGenerateProxies:
             patch("media_mate.proxy._probe_output_metadata") as mock_probe,
         ):
             mock_probe.return_value = (1920, 1080, 60.0)
-            results = generate_proxies(src, out, store)
+            batch = generate_proxies(src, out, store)
 
-        assert len(results) == 1
+        assert len(batch.results) == 1
+        assert len(batch.failures) == 1
         status, error = _latest_run_status(store)
         assert status == "partial"
         assert error is not None
@@ -398,9 +402,10 @@ class TestGenerateProxies:
 
         with patch("media_mate.proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ffmpeg failed")
-            results = generate_proxies(src, out, store)
+            batch = generate_proxies(src, out, store)
 
-        assert results == []
+        assert batch.results == []
+        assert len(batch.failures) == 2
         status, error = _latest_run_status(store)
         assert status == "failed"
         assert error is not None
@@ -434,6 +439,83 @@ class TestGenerateProxies:
             # ProRes422HQ is profile 3, height 720
             assert args[5] == "scale=-2:720"
             assert args[9] == "3"  # ProRes422HQ profile
+
+
+    def test_non_video_files_skipped(self, tmp_path: Path, store_dir: Path) -> None:
+        """Subtitles, sidecar DBs, and checksum files are excluded, not failed."""
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "clip.mov").write_bytes(b"raw")
+        (src / "clip.SRT").write_bytes(b"1\n00:00 --> 00:01\nhi")
+        (src / "sidecar.db").write_bytes(b"sqlite")
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        with (
+            patch(
+                "media_mate.proxy.subprocess.run",
+                side_effect=_fake_successful_ffmpeg,
+            ),
+            patch("media_mate.proxy._probe_output_metadata") as mock_probe,
+        ):
+            mock_probe.return_value = (1920, 1080, 60.0)
+            batch = generate_proxies(src, out, store)
+
+        assert len(batch.results) == 1
+        assert batch.failures == []
+        assert len(batch.skipped) == 2
+        assert not (out / "clip.SRT").exists()
+        assert _latest_run_status(store)[0] == "success"
+
+    def test_mp4_source_gets_mov_proxy(self, tmp_path: Path, store_dir: Path) -> None:
+        """ProRes goes in a QuickTime container even when the source is .MP4."""
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "DJI_0001.MP4").write_bytes(b"hevc")
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        with (
+            patch(
+                "media_mate.proxy.subprocess.run",
+                side_effect=_fake_successful_ffmpeg,
+            ),
+            patch("media_mate.proxy._probe_output_metadata") as mock_probe,
+        ):
+            mock_probe.return_value = (608, 1080, 10.0)
+            batch = generate_proxies(src, out, store)
+
+        assert len(batch.results) == 1
+        assert (out / "DJI_0001.mov").exists()
+        assert not (out / "DJI_0001.MP4").exists()
+
+    def test_empty_output_is_failure_and_cleaned(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        """ffmpeg exiting 0 without writing output must not count as success."""
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "clip.mov").write_bytes(b"raw")
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        def zero_byte_ffmpeg(*args, **kwargs):  # type: ignore[no-untyped-def]
+            output_path = Path(args[0][-1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("media_mate.proxy.subprocess.run", side_effect=zero_byte_ffmpeg):
+            batch = generate_proxies(src, out, store)
+
+        assert batch.results == []
+        assert len(batch.failures) == 1
+        assert "produced no output" in batch.failures[0].reason
+        # The dead 0-byte file was cleaned up so a re-run can retry
+        assert not (out / "clip.mov").exists()
+        assert _latest_run_status(store)[0] == "failed"
+
+
 
     def test_run_logs_proxy_path(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"

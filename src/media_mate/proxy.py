@@ -23,6 +23,8 @@ from pathlib import Path
 from media_mate.log import LogStore
 from media_mate.models import (
     MediaMateConfig,
+    ProxyBatchResult,
+    ProxyFailure,
     ProxyRecord,
     ProxyRequest,
     ProxyResult,
@@ -157,9 +159,16 @@ def generate_proxy(
         raise ProxyError(source, f"ffmpeg not found at {fp}: {e}") from e
 
     if result.returncode != 0:
+        # ffmpeg leaves a truncated/empty output behind on failure — remove
+        # it so a re-run doesn't skip the file as "already exists".
+        output.unlink(missing_ok=True)
         err_lines = [line for line in result.stderr.splitlines() if line.strip()]
         last_err = err_lines[-1] if err_lines else "unknown error"
         raise ProxyError(source, f"ffmpeg exited {result.returncode}: {last_err}")
+
+    if not output.is_file() or output.stat().st_size == 0:
+        output.unlink(missing_ok=True)
+        raise ProxyError(source, "ffmpeg exited 0 but produced no output")
 
     try:
         width, height, duration = _probe_output_metadata(output)
@@ -178,23 +187,52 @@ def generate_proxy(
     )
 
 
+#: Extensions proxy generation will attempt — video sources only (SPEC §5.3:
+#: "any ffmpeg-readable format by extension"). Everything else on a camera
+#: card (subtitles, sidecar databases, checksum manifests) is skipped.
+_VIDEO_EXTENSIONS = frozenset(
+    {
+        ".ari",
+        ".avi",
+        ".braw",
+        ".crm",
+        ".m2ts",
+        ".m4v",
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".mts",
+        ".mxf",
+        ".r3d",
+    }
+)
+
+
+def is_video_source(path: Path) -> bool:
+    """True when the file extension is a recognized video format."""
+    return path.suffix.lower() in _VIDEO_EXTENSIONS
+
+
 def generate_proxies(
     source: Path,
     output_dir: Path,
     store: LogStore,
     config: MediaMateConfig | None = None,
-) -> list[ProxyResult]:
-    """Generate proxies for all files in source (file or directory).
+) -> ProxyBatchResult:
+    """Generate proxies for all video files in source (file or directory).
 
-    Output paths mirror the relative path under source. For example, if
-    `source = raw/` and `raw/sub1/clip.mov` exists, the proxy lands at
+    Output paths mirror the relative path under source with a `.mov`
+    extension — ProRes belongs in a QuickTime container regardless of the
+    source container. For example, `raw/sub1/clip.MP4` lands at
     `output_dir/sub1/clip.mov`.
 
-    Files where the proxy already exists are skipped (not overwritten).
-    Each proxy is recorded in the proxies table of the audit log.
+    Non-video files (by extension) are excluded from the batch and listed
+    in the returned skipped list. Files where the proxy already exists are
+    recorded as failures (not overwritten). Each generated proxy is
+    recorded in the proxies table of the audit log.
 
     Run status:
-        - SUCCESS: all probed files generated successfully
+        - SUCCESS: every attempted video file generated successfully
         - PARTIAL: some succeeded, some failed (skip / OSError / ffmpeg error)
         - FAILED: no proxies generated
     """
@@ -210,8 +248,11 @@ def generate_proxies(
     else:
         raise ProxyError(source, "not a file or directory")
 
+    skipped = [str(f) for f, _ in files if not is_video_source(f)]
+    files = [(f, rel) for f, rel in files if is_video_source(f)]
+
     if not files:
-        return []
+        return ProxyBatchResult(skipped=skipped)
 
     ffmpeg_path = find_ffmpeg(cfg)
     command = f"media-mate proxy {source} --out {output_dir}"
@@ -221,7 +262,7 @@ def generate_proxies(
     errors: list[tuple[Path, str]] = []
 
     for f, rel in files:
-        out = output_dir / rel
+        out = (output_dir / rel).with_suffix(".mov")
 
         try:
             if out.exists():
@@ -271,7 +312,11 @@ def generate_proxies(
         error_msg = _format_errors(errors)
 
     store.finish_run(run_id, status, error_msg)
-    return results
+    return ProxyBatchResult(
+        results=results,
+        failures=[ProxyFailure(source_path=str(p), reason=r) for p, r in errors],
+        skipped=skipped,
+    )
 
 
 def _format_errors(errors: list[tuple[Path, str]], limit: int = 5) -> str:
@@ -289,4 +334,5 @@ __all__ = [
     "find_ffmpeg",
     "generate_proxies",
     "generate_proxy",
+    "is_video_source",
 ]

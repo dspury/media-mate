@@ -181,14 +181,20 @@ def proxy(ctx: click.Context, path: Path, output_dir: Path) -> None:
     """Generate edit-friendly proxy files via ffmpeg."""
     store = _get_store(ctx)
     cfg = _get_config(ctx)
-    results = generate_proxies(path, output_dir, store, config=cfg)
+    batch = generate_proxies(path, output_dir, store, config=cfg)
 
     console = Console()
-    console.print(f"[green]Generated {len(results)} proxy file(s)[/green]")
-    if not results:
-        console.print(
-            "[yellow]No proxies generated. Check for skipped/already-existing files.[/yellow]"
-        )
+    console.print(f"[green]Generated {len(batch.results)} proxy file(s)[/green]")
+    if batch.skipped:
+        console.print(f"[dim]Skipped {len(batch.skipped)} non-video file(s)[/dim]")
+    if batch.failures:
+        console.print(f"[red]Failed {len(batch.failures)} file(s):[/red]")
+        for failure in batch.failures[:5]:
+            console.print(f"  {Path(failure.source_path).name}: {failure.reason}")
+        if len(batch.failures) > 5:
+            console.print(f"  ... and {len(batch.failures) - 5} more")
+    if not batch.results and not batch.failures:
+        console.print("[yellow]No video files found to proxy.[/yellow]")
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +446,12 @@ def run_cmd(
         source_for_proxy = organized_root or path
         console.print("[bold]Step 3: proxy[/bold]")
         proxy_dir = out_root / "proxies"
-        proxy_results = generate_proxies(source_for_proxy, proxy_dir, store, config=cfg)
-        console.print(f"  Generated {len(proxy_results)} proxy file(s)")
+        proxy_batch = generate_proxies(source_for_proxy, proxy_dir, store, config=cfg)
+        console.print(f"  Generated {len(proxy_batch.results)} proxy file(s)")
+        if proxy_batch.skipped:
+            console.print(f"  Skipped {len(proxy_batch.skipped)} non-video file(s)")
+        if proxy_batch.failures:
+            console.print(f"  [red]Failed {len(proxy_batch.failures)} file(s)[/red]")
 
     # Step 4: resolve project (optional)
     if do_resolve:

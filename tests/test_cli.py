@@ -135,7 +135,9 @@ class TestProxyCommand:
         (src / "a.mov").write_bytes(b"a")
 
         with patch("media_mate.cli.generate_proxies") as mock_gen:
-            mock_gen.return_value = []
+            from media_mate.models import ProxyBatchResult
+
+            mock_gen.return_value = ProxyBatchResult()
             result = _invoke_with_db(runner, ["proxy", str(src), "--out", str(out)], tmp_db)
 
         assert result.exit_code == 0
@@ -431,6 +433,7 @@ class TestRunCommand:
             from media_mate.models import (
                 ChecksumAlgo,
                 OrganizeResult,
+                ProxyBatchResult,
                 ResolveProjectResult,
                 VerificationReport,
             )
@@ -446,7 +449,7 @@ class TestRunCommand:
                 dry_run=False,
                 errors=[],
             )
-            mock_proxy.return_value = []
+            mock_proxy.return_value = ProxyBatchResult()
             mock_resolve.return_value = ResolveProjectResult(
                 name="X",
                 path="",

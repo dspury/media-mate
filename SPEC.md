@@ -63,7 +63,7 @@ Extract structured metadata from any media file (video / audio / image) using `f
 Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead. Each operation is logged; the manifest is reversible.
 
 ### 5.3 Proxy generation
-Generate edit-friendly proxies (default: ProRes 422 Proxy at 1080p, aspect-preserving) from raw camera formats. Supports RED (.r3d), Blackmagic (.braw), MOV, MXF, ARI out of the box; any ffmpeg-readable format by extension. FFmpeg-only (no Resolve dependency for this capability).
+Generate edit-friendly proxies (default: ProRes 422 Proxy at 1080p, aspect-preserving) from raw camera formats. Output is always a `.mov` QuickTime file regardless of source container; non-video files are excluded by extension. Supports RED (.r3d), Blackmagic (.braw), MOV, MXF, ARI out of the box; any ffmpeg-readable format by extension. FFmpeg-only (no Resolve dependency for this capability).
 
 ### 5.4 DaVinci Resolve project creation
 Programmatically create a Resolve project (`.drp`) from a manifest + a config. Sets project resolution / frame rate / color space; creates a bin structure mirroring the source folder; imports media into the appropriate bins; creates a timeline pre-populated with proxy references. Graceful degradation: if Resolve isn't running/installed, emits a "ready to import" manifest instead and logs a warning.
