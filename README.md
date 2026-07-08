@@ -1,6 +1,6 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.1.3-blue)](https://github.com/dspury/media-mate)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
@@ -28,7 +28,7 @@ $ media-mate run ./raw/ --organize --proxy --resolve-project --verify --project-
 Step 1: probe
   Probed 4 file(s)
 Step 2: organize
-  Moved 4, skipped 0
+  Copied 4, skipped 0
 Step 3: proxy
   Generated 4 proxy file(s)
 Step 4: resolve-project
@@ -145,6 +145,8 @@ media-mate organize ./raw/ --root ./organized/
 ```
 
 Requires that the files have already been probed. Files without probe data are skipped (with a clear error message); run `media-mate probe` first.
+
+Sources are **copied** by default — the raw folder is treated as immutable camera media. Pass `--move` to relocate instead.
 
 Default layout: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Customize via `media-mate.toml`.
 
@@ -279,7 +281,7 @@ Every operation writes to `~/.media-mate/media-mate.db` (SQLite). The schema cov
 The audit log answers questions like:
 
 - "When did this file get probed, and what was the result?"
-- "What got moved during the last organize run?"
+- "What got copied during the last organize run?"
 - "When was this Resolve project created, and from what source folder?"
 - "What was the checksum of this file at the last verify?"
 
@@ -297,9 +299,9 @@ See [`SPEC.md`](./SPEC.md) for the full write-up: goals, capabilities, data flow
 
 ## Status
 
-**Beta (`0.1.3`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
+**Beta (`0.2.0`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
 
-What works in `0.1.3`:
+What works in `0.2.0`:
 - All six core capabilities (probe, organize, proxy, resolve, verify, run/log)
 - Interactive Textual TUI (`media-mate tui`) — home, pipeline runner, log browser, settings
 - Local SQLite audit log with full schema

@@ -34,10 +34,12 @@ def _invoke_with_db(runner: CliRunner, args: list[str], db: Path) -> object:
 
 class TestTopLevel:
     def test_version(self, runner: CliRunner) -> None:
+        from media_mate import __version__
+
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
         assert "media-mate" in result.output
-        assert "0.1.0" in result.output
+        assert __version__ in result.output
 
     def test_help(self, runner: CliRunner) -> None:
         result = runner.invoke(main, ["--help"])

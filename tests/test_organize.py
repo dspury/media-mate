@@ -236,7 +236,7 @@ class TestOrganizePath:
         # No run was created for an empty directory
         assert _count_rows(store, "runs") == 0
 
-    def test_moves_probed_files(self, tmp_path: Path, store_dir: Path) -> None:
+    def test_copies_probed_files_by_default(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"
         src.mkdir()
         out = tmp_path / "out"
@@ -253,12 +253,45 @@ class TestOrganizePath:
         assert result.files_moved == 2
         assert result.files_skipped == 0
         assert result.bytes_moved == 2048
-        assert not (src / "a.mov").exists()
+        # Copy is the default: raw files stay in place
+        assert (src / "a.mov").exists()
+        assert (src / "b.mov").exists()
         assert (out / "h264" / "1080p" / "a.mov").exists()
         assert (out / "h264" / "1080p" / "b.mov").exists()
 
         # Audit log got the rows
         assert _count_rows(store, "organize_ops") == 2
+
+    def test_move_flag_relocates_files(self, tmp_path: Path, store_dir: Path) -> None:
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        (src / "a.mov").write_bytes(b"x" * 1024)
+        _seed_probe(store, str(src / "a.mov"), codec="h264", height=1080, size=1024)
+
+        result = organize_path(src, out, store, move=True)
+
+        assert result.files_moved == 1
+        assert not (src / "a.mov").exists()
+        assert (out / "h264" / "1080p" / "a.mov").exists()
+
+    def test_config_mode_move(self, tmp_path: Path, store_dir: Path) -> None:
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        (src / "a.mov").write_bytes(b"x")
+        _seed_probe(store, str(src / "a.mov"), codec="h264", height=1080)
+
+        cfg = MediaMateConfig.model_validate({"organize": {"mode": "move"}})
+        result = organize_path(src, out, store, config=cfg)
+
+        assert result.files_moved == 1
+        assert not (src / "a.mov").exists()
+        assert (out / "h264" / "1080p" / "a.mov").exists()
 
     def test_skips_unprobed_files(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"

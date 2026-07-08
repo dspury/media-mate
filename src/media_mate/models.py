@@ -82,6 +82,7 @@ class OrganizeConfig(BaseModel):
 
     template: str = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
     on_conflict: Literal["skip", "overwrite", "rename"] = "skip"
+    mode: Literal["copy", "move"] = "copy"
 
 
 class OrganizeResult(BaseModel):

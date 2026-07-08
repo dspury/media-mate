@@ -17,6 +17,11 @@ template = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
 # Options: skip (default) | overwrite | rename
 on_conflict = "skip"
 
+# Whether organize copies sources into the layout (leaving the raw
+# folder intact) or moves them.
+# Options: copy (default) | move
+mode = "copy"
+
 # Proxy generation defaults
 proxy_codec = "ProRes422Proxy"  # ProRes variant
 proxy_height = 1080             # target height (preserves aspect)

@@ -60,7 +60,7 @@ The killer demo: drop a folder of raw media in, run `media-mate run`, and walk a
 Extract structured metadata from any media file (video / audio / image) using `ffprobe`. Output is a `pydantic` model capturing: codec, container, resolution, frame rate, color space / transfer / primaries, bit depth, audio channels / sample rate / bit depth, duration, file size, modification time. JSON-serializable, queryable in SQLite.
 
 ### 5.2 Organize
-Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Each move is logged; the manifest is reversible.
+Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead. Each operation is logged; the manifest is reversible.
 
 ### 5.3 Proxy generation
 Generate edit-friendly proxies (default: ProRes 422 Proxy at 1080p, aspect-preserving) from raw camera formats. Supports RED (.r3d), Blackmagic (.braw), MOV, MXF, ARI out of the box; any ffmpeg-readable format by extension. FFmpeg-only (no Resolve dependency for this capability).

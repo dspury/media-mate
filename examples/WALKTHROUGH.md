@@ -53,7 +53,7 @@ Moves files into a structured layout: `<codec_family>/<resolution_bucket>/<filen
 ```
 $ media-mate organize test-dataset/raw/ --root test-dataset/output/organized/
 
-  Moved 5 file(s), skipped 0, 2,847,362 bytes total
+  Copied 5 file(s), skipped 0, 2,847,362 bytes total
 ```
 
 Resulting layout:

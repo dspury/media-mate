@@ -126,19 +126,31 @@ def probe(ctx: click.Context, path: Path) -> None:
     required=True,
     help="Destination root for organized output.",
 )
+@click.option(
+    "--move",
+    "do_move",
+    is_flag=True,
+    default=False,
+    help="Move files instead of copying (raw folder is left intact by default).",
+)
 @click.pass_context
-def organize(ctx: click.Context, path: Path, root: Path) -> None:
-    """Organize media files into a structured folder layout."""
+def organize(ctx: click.Context, path: Path, root: Path, do_move: bool) -> None:
+    """Organize media files into a structured folder layout.
+
+    Sources are copied by default; pass --move to relocate them.
+    """
     store = _get_store(ctx)
     cfg = _get_config(ctx)
-    result = organize_path(path, root, store, config=cfg)
+    result = organize_path(path, root, store, config=cfg, move=do_move or None)
 
     console = Console()
     if result.files_moved == 0 and result.files_skipped == 0:
         console.print("[yellow]No files to organize[/yellow]")
         return
+    moved = do_move or cfg.organize.mode == "move"
+    verb = "Moved" if moved else "Copied"
     console.print(
-        f"[green]Moved {result.files_moved} file(s)[/green], "
+        f"[green]{verb} {result.files_moved} file(s)[/green], "
         f"[yellow]skipped {result.files_skipped}[/yellow], "
         f"{result.bytes_moved:,} bytes total"
     )
@@ -373,6 +385,14 @@ def _fetch_recent_runs(db_path: Path, limit: int) -> list[dict[str, Any]]:
     default="MediaProject",
     help="Name for the Resolve project (used with --resolve-project).",
 )
+@click.option(
+    "--out",
+    "out_dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output root for organized media, proxies, and project files "
+    "(default: <source>-output next to the source folder).",
+)
 @click.pass_context
 def run_cmd(
     ctx: click.Context,
@@ -382,15 +402,21 @@ def run_cmd(
     do_resolve: bool,
     do_verify: bool,
     project_name: str,
+    out_dir: Path | None,
 ) -> None:
     """Run a media-ops pipeline on a folder.
 
     Always probes first (idempotent — already-probed files just get re-probed).
     Then runs each enabled step in order: organize → proxy → resolve-project → verify.
+
+    The source folder is read-only for the whole pipeline: organize copies
+    into the output root (see --out) unless [organize] mode = "move" is set
+    in config.
     """
     store = _get_store(ctx)
     cfg = _get_config(ctx)
     console = Console()
+    out_root = out_dir if out_dir is not None else path.parent / f"{path.name}-output"
 
     # Step 1: probe (always)
     console.print("[bold]Step 1: probe[/bold]")
@@ -400,9 +426,10 @@ def run_cmd(
     # Step 2: organize (optional)
     if do_organize:
         console.print("[bold]Step 2: organize[/bold]")
-        root = path / "organized"
+        root = out_root / "organized"
         org_result = organize_path(path, root, store, config=cfg)
-        console.print(f"  Moved {org_result.files_moved}, skipped {org_result.files_skipped}")
+        verb = "Moved" if cfg.organize.mode == "move" else "Copied"
+        console.print(f"  {verb} {org_result.files_moved}, skipped {org_result.files_skipped}")
         organized_root: Path | None = root
     else:
         organized_root = None
@@ -412,7 +439,7 @@ def run_cmd(
     if do_proxy:
         source_for_proxy = organized_root or path
         console.print("[bold]Step 3: proxy[/bold]")
-        proxy_dir = source_for_proxy / "proxies"
+        proxy_dir = out_root / "proxies"
         proxy_results = generate_proxies(source_for_proxy, proxy_dir, store, config=cfg)
         console.print(f"  Generated {len(proxy_results)} proxy file(s)")
 
@@ -420,10 +447,11 @@ def run_cmd(
     if do_resolve:
         console.print("[bold]Step 4: resolve-project[/bold]")
         source_for_resolve = organized_root or path
+        out_root.mkdir(parents=True, exist_ok=True)
         spec = ResolveProjectSpec(
             name=project_name,
             source_folder=str(source_for_resolve),
-            output_path=str(source_for_resolve / f"{project_name}.drp"),
+            output_path=str(out_root / f"{project_name}.drp"),
         )
         resolve_result = create_resolve_project(
             spec, source_for_resolve, proxy_dir, store, config=cfg
@@ -436,7 +464,7 @@ def run_cmd(
     # Step 5: verify (optional)
     if do_verify:
         console.print("[bold]Step 5: verify[/bold]")
-        report = verify_folder(path, store)
+        report = verify_folder(organized_root or path, store)
         if report.is_clean:
             console.print(f"  Clean: {report.files_checked} file(s) verified")
         else:

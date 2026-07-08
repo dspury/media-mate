@@ -162,6 +162,7 @@ def organize_path(
     store: LogStore,
     config: MediaMateConfig | None = None,
     dry_run: bool = False,
+    move: bool | None = None,
 ) -> OrganizeResult:
     """Organize files from source into dest_root.
 
@@ -169,17 +170,23 @@ def organize_path(
     data already in the audit log. Files without probe data are skipped
     (with the reason recorded in errors); the user should run probe first.
 
-    Each move is recorded in organize_ops so the operation can be reversed
-    in a future release.
+    Source files are copied by default so the raw folder stays intact —
+    treat originals as immutable camera media. Pass move=True (or set
+    [organize] mode = "move" in config) to relocate instead. When move is
+    None the config decides.
+
+    Each operation is recorded in organize_ops so it can be reversed in a
+    future release.
 
     Run status:
-        - SUCCESS: all probed files moved successfully
-        - PARTIAL: some moved, some skipped (no probe / conflict / OSError)
-        - FAILED: nothing moved
+        - SUCCESS: all probed files organized successfully
+        - PARTIAL: some organized, some skipped (no probe / conflict / OSError)
+        - FAILED: nothing organized
     """
     source = Path(source)
     dest_root = Path(dest_root)
     cfg = (config or MediaMateConfig()).organize
+    do_move = move if move is not None else cfg.mode == "move"
     started = datetime.now(UTC)
 
     if not source.exists():
@@ -205,6 +212,8 @@ def organize_path(
     probes = store.get_latest_probes_by_paths([str(f) for f in files])
 
     command = f"media-mate organize {source} --root {dest_root}"
+    if do_move:
+        command += " --move"
     run_id = store.start_run(command)
 
     files_moved = 0
@@ -214,7 +223,7 @@ def organize_path(
 
     for f in files:
         try:
-            size = f.stat().st_size  # capture before move
+            size = f.stat().st_size  # capture before copy/move
 
             probe = probes.get(str(f))
             if probe is None:
@@ -234,11 +243,14 @@ def organize_path(
                     continue
                 if cfg.on_conflict == "rename":
                     dest = _unique_path(dest)
-                # "overwrite" falls through and shutil.move will overwrite
+                # "overwrite" falls through; copy2/move both overwrite
 
             if not dry_run:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(f), str(dest))
+                if do_move:
+                    shutil.move(str(f), str(dest))
+                else:
+                    shutil.copy2(str(f), str(dest))
                 store.insert_organize_op(
                     OrganizeOpRecord(
                         run_id=run_id,
