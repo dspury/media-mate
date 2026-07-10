@@ -1,8 +1,8 @@
-# media-mate — Spec v0.2.2
+# media-mate — Spec v0.3.0
 
 > **Name:** `media-mate`
 > **Repo location:** `dspury/media-mate`
-> **Version:** 0.2.2
+> **Version:** 0.3.0
 > **Status:** Released — stable
 
 ---
@@ -486,6 +486,35 @@ Closed in v0.2.2: #7 (SAR), #17 (--dry-run), #19 (proxy drops TC/audio), #25 (ed
 
 ---
 
+### v0.3.0 — Organizational correctness and spec hardening
+
+**Status:** Released.
+
+#### Bug fixes
+
+- **Verify would silently rebaseline on any mismatch.** When verification found files missing or modified, `store.replace_verification_snapshot()` was unconditionally called, replacing the known-good baseline with the mismatched state. This meant corruption could suppress future detections. Fixed: snapshot is only replaced when verification is clean, or when the user explicitly acknowledges via `verify --accept-changes`.
+- **R3D/BRAW/ARI silently produced empty proxies.** These RAW codecs require DecodeClass/clip decoding in Resolve or compositor-level tools — ffmpeg cannot generate correct proxies from them. Fixed: these container formats now fail immediately with a clear error message instead of producing silent quality failures.
+
+#### New capabilities
+
+- **Source-structure-preserving default template.** The default organize template changed from `{root}/{codec_family}/{resolution_bucket}/{filename}{ext}` to `{root}/{source_relpath}/{filename}{ext}`. Media is now organized preserving card/scene/take subfolder structure, matching how AEs and DITs think about footage. Users who want codec+resolution grouping can set `template = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"` in `media-mate.toml`.
+- **Same-device hardlinking in organize.** When `copy` mode is used and source and destination are on the same filesystem (detected via `st_dev`), `os.link()` is used instead of `shutil.copy2()`. Zero-copy on same-device copies; originals remain immutable. Falls back to copy on cross-device or permission errors.
+- **Spanned/multi-file clip detection.** Before organizing, the source folder is scanned for multi-file clip patterns (sequential suffixes like `_001.mov`, `_002.mov`, and RED `.RDC` files). Detected groups are logged as warnings (`[SPAN]`) so the user can verify all parts are included.
+- **`verify --accept-changes`.** New CLI flag on the verify command. When verification finds differences, the user can re-run with `--accept-changes` to explicitly accept the new state as the new baseline, without having to manually edit the database.
+
+#### Data model changes
+
+- `OrganizeResult`: new field `span_warnings: list[str]` — one warning string per detected multi-file clip group.
+- `OrganizeOpRecord`: new field `operation: Literal["copy", "move", "link"]` — records whether this op was a copy, move, or hardlink.
+- `log.py` `organize_ops` table: new `operation TEXT NOT NULL` column.
+
+#### Resolve improvements
+
+- **Empty source guard.** `create_resolve_project()` now raises `ResolveError` immediately if the source folder contains no files, rather than silently creating an empty Resolve project. Message: `"source folder is empty: <path>. Resolve cannot import from an empty folder — add media before trying to create a project."`
+- **Spec honesty.** Module docstring updated with explicit known limitations: empty timeline (MediaPoolItem creation deferred), bin naming assumptions, and spanned-clip handling deferred to v1.0.
+
+---
+
 ## 19. Open issues — v0.3 candidates
 
 The following issues are acknowledged and targeted for v0.3. Each requires a spec change or design decision before implementation.
@@ -574,5 +603,20 @@ All items below were approved and shipped in v0.2.2:
 - New capabilities in §18
 - Data model additions in §18
 - v0.3 candidates as documented in §19
+
+Shipped as approved ✓
+
+---
+
+All items below were approved and shipped in v0.3.0:
+
+- Verify no-silent-rebaseline (#21) — §18 v0.3.0
+- R3D/BRAW/ARI clear error (#24) — §18 v0.3.0
+- VFR CFR default (#8) — §18 v0.3.0
+- Source-preserving default template (#22) — §18 v0.3.0
+- Same-device hardlinking (#11) — §18 v0.3.0
+- Spanned clip detection (#23) — §18 v0.3.0
+- Resolve empty source guard (#20) — §18 v0.3.0
+- Spec honesty for Resolve (#30) — §18 v0.3.0
 
 Shipped as approved ✓

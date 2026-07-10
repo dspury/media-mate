@@ -1,6 +1,6 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue)](https://github.com/dspury/media-mate)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
