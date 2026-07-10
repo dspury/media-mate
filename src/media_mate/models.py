@@ -81,10 +81,15 @@ class OrganizeConfig(BaseModel):
     """Top-level organize configuration.
 
     Template placeholders: {root}, {codec_family}, {resolution_bucket},
-    {filename}, {ext}, {date}.
+    {filename}, {ext}, {date}, {source_relpath}.
+
+    Default template preserves the source folder structure under dest_root
+    ({source_relpath}), which matches how AEs and DITs think about media
+    (cards/scenes/takes). Use {codec_family}/{resolution_bucket} as
+    an alternative layout when you want codec+resolution grouping.
     """
 
-    template: str = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
+    template: str = "{root}/{source_relpath}/{filename}{ext}"
     on_conflict: Literal["skip", "overwrite", "rename"] = "skip"
     mode: Literal["copy", "move"] = "copy"
 
@@ -100,6 +105,7 @@ class OrganizeResult(BaseModel):
     duration_seconds: float
     dry_run: bool
     errors: list[str] = Field(default_factory=list)
+    span_warnings: list[str] = Field(default_factory=list)  # multi-file clip detections
 
 
 class OrganizeOpRecord(BaseModel):
@@ -109,6 +115,7 @@ class OrganizeOpRecord(BaseModel):
     run_id: int
     source_path: str
     destination_path: str
+    operation: Literal["copy", "move", "link"]  # link = hardlink (same-device)
     codec_family: str | None
     resolution_bucket: str | None
     file_size: int | None

@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS organize_ops (
     run_id INTEGER REFERENCES runs(id),
     source_path TEXT NOT NULL,
     destination_path TEXT NOT NULL,
+    operation TEXT NOT NULL,          -- copy | move | link
     codec_family TEXT,
     resolution_bucket TEXT,
     file_size INTEGER,
@@ -410,12 +411,13 @@ class LogStore:
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO organize_ops (run_id, source_path, destination_path, "
-                "codec_family, resolution_bucket, file_size, moved_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "operation, codec_family, resolution_bucket, file_size, moved_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.run_id,
                     record.source_path,
                     record.destination_path,
+                    record.operation,
                     record.codec_family,
                     record.resolution_bucket,
                     record.file_size,

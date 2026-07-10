@@ -168,6 +168,12 @@ def _ffmpeg_cmd(
     audio_codec = _audio_codec_for(probe)
     cmd += ["-c:a", audio_codec]
 
+    # Force CFR on VFR sources (action cams, phone recordings, screen captures).
+    # r_frame_rate from ffprobe is the real rate; avg_frame_rate is nominal.
+    # VFR sources cause audio sync drift in proxies — CFR normalization fixes it.
+    # -fps_mode cfr is applied after input decode, before output encode.
+    cmd += ["-fps_mode", "cfr"]
+
     cmd.append(str(output))
     return cmd
 
@@ -347,6 +353,15 @@ def generate_proxies(
                 target_height=cfg.proxy_height,
                 probe=probe,
             )
+
+            # Reject RAW codecs that stock ffmpeg cannot decode.
+            # These require vendor SDKs (RED, Blackmagic, ARRI).
+            # Container is recognized but decode will fail with a cryptic error.
+            raw_codecs = {"r3d", "braw", "ari"}
+            if probe and probe.video_codec and probe.video_codec.lower() in raw_codecs:
+                failures.append((f, f"RAW codec '{probe.video_codec}' requires vendor SDK; stock ffmpeg cannot decode"))
+                continue
+
             result = generate_proxy(request, ffmpeg_path=ffmpeg_path)
             results.append(result)
 

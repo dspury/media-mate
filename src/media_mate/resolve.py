@@ -1,8 +1,8 @@
 """Resolve capability — create DaVinci Resolve projects programmatically.
 
-Two layers, both always available:
+Architecture: manifest-first, Resolve API best-effort.
 
-1. **Manifest builder** (pure functions, no Resolve dependency):
+1. **Manifest builder** (always runs, pure functions, no Resolve dependency):
     resolve_bin_structure(source_folder) -> list[str]
         Compute bin paths mirroring the folder's subdirectory layout.
     build_project_manifest(source_folder, spec, proxy_dir=None) -> dict
@@ -10,17 +10,27 @@ Two layers, both always available:
     write_manifest(manifest, output_path) -> Path
         Write a manifest dict to disk.
 
-2. **Resolve adapter** (best-effort, uses the live API when available):
+2. **Resolve adapter** (best-effort — requires live Resolve + running API):
     find_resolve(config) -> ModuleType | None
         Try to load the DaVinciResolveScript module; None if unavailable.
     create_resolve_project(spec, source_folder, proxy_dir, store, config=None) -> ResolveProjectResult
-        Try the Resolve API; fall back to writing a manifest file when Resolve
-        isn't available. Always returns a result; ``resolve_version=None``
-        indicates the manifest fallback was used.
+        Always builds the manifest first. Then tries the Resolve API; falls back
+        to writing a manifest file when Resolve isn't available or an API call fails.
+        ``resolve_version=None`` indicates the manifest fallback was used.
 
-The manifest is also what gets written on disk when the Resolve API is
-unavailable, so a user can manually create the project in Resolve from the
-manifest description.
+The manifest is the ground truth — it is always written to disk (at
+``<output_path>.manifest.json``) when the Resolve API path fails or is
+unavailable, so the user can manually act on it.
+
+**Known limitations (deferred to v1.0):**
+- MediaPoolItem creation: Resolve requires MediaPoolItems (not raw file paths)
+  to link clips into the timeline. The current API path creates an empty timeline;
+  clip-by-clip linking requires a heavier import step that is deferred.
+- Bin naming: sub-bins are named as ``"root/subfolder"`` (e.g. ``"raw/shoot_day_1"``).
+  This may not match the user's existing bin structure in Resolve.
+- Spanned/multi-file clips: each file is treated as a separate clip. A proper
+  spanned-clip model requires understanding clip relationships per camera format
+  (RED R3D multi-part, ARRI RAW .ari + .idx, etc.) — deferred to v1.0.
 """
 
 from __future__ import annotations
@@ -299,6 +309,16 @@ def create_resolve_project(
 
     if not source_folder.is_dir():
         raise ResolveError(f"source folder does not exist: {source_folder}")
+
+    # Guard: an empty source folder produces an empty Resolve project, which
+    # is never what the user wants. Reject early with a clear message rather
+    # than silently creating a blank project they have to delete.
+    media_files = _media_files_in(source_folder)
+    if not media_files:
+        raise ResolveError(
+            f"source folder is empty: {source_folder}. "
+            "Resolve cannot import from an empty folder — add media before trying to create a project."
+        )
 
     manifest = build_project_manifest(source_folder, spec, proxy_dir_resolved)
 

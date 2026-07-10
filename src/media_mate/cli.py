@@ -169,6 +169,10 @@ def organize(ctx: click.Context, path: Path, root: Path, do_move: bool, dry_run:
             console.print(f"  {err}")
         if len(result.errors) > 5:
             console.print(f"  ... and {len(result.errors) - 5} more")
+    if result.span_warnings:
+        console.print("[yellow]Spanned clip warnings:[/yellow]")
+        for w in result.span_warnings:
+            console.print(f"  {w}")
 
 
 # ---------------------------------------------------------------------------
@@ -297,11 +301,17 @@ def resolve_create(
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--accept-changes",
+    is_flag=True,
+    default=False,
+    help="Acknowledge and record the current state as the new baseline after a mismatch.",
+)
 @click.pass_context
-def verify(ctx: click.Context, path: Path) -> None:
+def verify(ctx: click.Context, path: Path, accept_changes: bool) -> None:
     """Verify a folder against its previous checksum snapshot."""
     store = _get_store(ctx)
-    report = verify_folder(path, store)
+    report = verify_folder(path, store, accept_changes=accept_changes)
 
     console = Console()
     if report.is_clean:
@@ -314,6 +324,10 @@ def verify(ctx: click.Context, path: Path) -> None:
             console.print(f"  Modified: {report.files_modified}")
         if report.files_added:
             console.print(f"  Added: {report.files_added}")
+        console.print(
+            "\n[dim]Run with --accept-changes to acknowledge these differences "
+            "and set a new baseline.[/dim]"
+        )
 
     # Exit with the report's exit code so scripts can switch on it.
     ctx.exit(report.exit_code)

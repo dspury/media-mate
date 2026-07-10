@@ -17,9 +17,12 @@ operation can be reversed in a future release.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from media_mate.log import LogStore
 from media_mate.models import (
@@ -78,6 +81,34 @@ _CODEC_FAMILY_MAP: dict[str, str] = {
     "pcm_f32le": "audio",
 }
 
+# Patterns that suggest a multi-file / spanned clip:
+# e.g. ClipName_001.mov, ClipName_002.mxf, ClipName.RDC
+_SPANNED_PATTERNS = (
+    r"^(?P<base>.+?)[\._](?P<seq>\d{3,6})\.[a-zA-Z0-9]+$",
+    r"^(?P<base>.+?)\.RDC$",
+)
+
+
+def _spanned_clip_groups(
+    files: list[Path],
+) -> list[tuple[str, list[Path]]]:
+    """Detect groups of multi-file / spanned clips and return (base_name, parts).
+
+    Returns a list of (base_name, [paths...]) where each group has 2+ parts.
+    Checks for sequential numeric suffixes (_001, _002, ...) and RED .RDC files.
+    """
+    groups: dict[str, list[Path]] = {}
+    for f in files:
+        name = f.name
+        for pat in _SPANNED_PATTERNS:
+            m = re.match(pat, name, re.IGNORECASE)
+            if m:
+                base = m.group("base")
+                groups.setdefault(base, []).append(f)
+                break
+
+    return [(base, parts) for base, parts in groups.items() if len(parts) >= 2]
+
 
 def codec_family(codec: str | None) -> str:
     """Map a codec name to a coarse family bucket.
@@ -121,12 +152,27 @@ def build_destination_path(
     family: str,
     bucket: str,
     date: str | None = None,
+    source_root: Path | None = None,
 ) -> Path:
     """Render an organize template to a destination Path.
 
     Template placeholders: {root}, {codec_family}, {resolution_bucket},
-    {filename}, {ext}, {date}.
+    {filename}, {ext}, {date}, {source_relpath}.
+
+    source_relpath is the directory part of the source file relative to
+    source_root (i.e., source's parent directory relative to source_root),
+    preserving any subfolder structure under the organize root.
     """
+    source_relpath = ""
+    if source_root is not None:
+        try:
+            # source is the file path; source_relpath is its directory
+            # relative to source_root (preserves card/scene subfolders)
+            source_relpath = str(source.parent.relative_to(source_root))
+        except ValueError:
+            # source is not under source_root
+            source_relpath = ""
+
     ctx = {
         "root": str(dest_root),
         "codec_family": family,
@@ -134,6 +180,7 @@ def build_destination_path(
         "filename": source.stem,
         "ext": source.suffix,
         "date": date or datetime.now(UTC).strftime("%Y-%m-%d"),
+        "source_relpath": source_relpath,
     }
     return Path(template.format(**ctx))
 
@@ -196,6 +243,16 @@ def organize_path(
 
     files = sorted(p for p in source.rglob("*") if p.is_file())
 
+    # Detect multi-file / spanned clips before organizing (logged as warnings)
+    span_warnings: list[str] = []
+    spanned = _spanned_clip_groups(files)
+    for base, parts in spanned:
+        span_warnings.append(
+            f"[SPAN] {base}: {len(parts)} files detected as multi-file clip "
+            f"({', '.join(p.name for p in parts)}); "
+            f"organizing individually — verify all parts are included"
+        )
+
     if not files:
         return OrganizeResult(
             source_path=str(source),
@@ -233,7 +290,9 @@ def organize_path(
 
             family = codec_family(probe.codec)
             bucket = resolution_bucket(probe.height)
-            dest = build_destination_path(cfg.template, dest_root, f, family, bucket)
+            dest = build_destination_path(
+                cfg.template, dest_root, f, family, bucket, source_root=source
+            )
 
             # Conflict handling
             if dest.exists():
@@ -250,18 +309,34 @@ def organize_path(
                 if do_move:
                     shutil.move(str(f), str(dest))
                 else:
-                    shutil.copy2(str(f), str(dest))
-                store.insert_organize_op(
-                    OrganizeOpRecord(
-                        run_id=run_id,
-                        source_path=str(f),
-                        destination_path=str(dest),
-                        codec_family=family,
-                        resolution_bucket=bucket,
-                        file_size=size,
-                        moved_at=datetime.now(UTC),
+                    # Same-device: use os.link() for zero-copy.
+                    # Both paths must be on the same filesystem (stat st_dev).
+                    # Hardlinks share the same inode; originals remain immutable.
+                    same_device = f.stat().st_dev == dest.parent.stat().st_dev
+                    if same_device:
+                        try:
+                            os.link(str(f), str(dest))
+                            op: Literal["copy", "move", "link"] = "link"
+                        except OSError:
+                            # Fallback to copy if hardlink fails (cross-fs, permissions)
+                            shutil.copy2(str(f), str(dest))
+                            op = "copy"
+                    else:
+                        shutil.copy2(str(f), str(dest))
+                        op = "copy"
+
+                    store.insert_organize_op(
+                        OrganizeOpRecord(
+                            run_id=run_id,
+                            source_path=str(f),
+                            destination_path=str(dest),
+                            operation=op,
+                            codec_family=family,
+                            resolution_bucket=bucket,
+                            file_size=size,
+                            moved_at=datetime.now(UTC),
+                        )
                     )
-                )
 
             files_moved += 1
             bytes_moved += size
@@ -296,6 +371,7 @@ def organize_path(
         duration_seconds=duration,
         dry_run=dry_run,
         errors=errors,
+        span_warnings=span_warnings,
     )
 
 
@@ -305,4 +381,5 @@ __all__ = [
     "codec_family",
     "organize_path",
     "resolution_bucket",
+    "_spanned_clip_groups",
 ]
