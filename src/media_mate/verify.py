@@ -4,14 +4,15 @@ Public API:
     compute_checksum(path, algo="xxhash") -> str
         Compute a checksum for a single file. Streams in 64KB chunks so it's
         safe for large media files.
-    verify_folder(folder, store, config=None) -> VerificationReport
+    verify_folder(folder, store, config=None, accept_changes=False) -> VerificationReport
         Compute current checksums for a folder, diff against the previously
-        recorded snapshot, write the new snapshot, return a structured report.
+        recorded snapshot. Returns a structured report.
 
 Workflow:
     First call: snapshot is created (no prior baseline), report shows 0 diffs.
-    Subsequent calls: each call's snapshot becomes the new baseline; the report
-    shows what changed since the previous call. Designed for cron.
+    Subsequent calls: diff against the previous snapshot. The baseline is
+    NOT updated on mismatch — use --accept-changes to explicitly set a new
+    baseline after reviewing the diff. Designed for cron.
 
 Exit codes (per SPEC.md §5.5; priority-ordered):
     0 = clean (no diffs, or first-time snapshot)
@@ -121,12 +122,18 @@ def verify_folder(
     folder: Path,
     store: LogStore,
     config: MediaMateConfig | None = None,
+    *,
+    accept_changes: bool = False,
 ) -> VerificationReport:
     """Verify a folder against the previous snapshot; write a new snapshot.
 
     First call for a folder: creates a snapshot, returns a clean report.
-    Subsequent calls: diff against the previous snapshot, write a new
-    snapshot, return a report describing what changed.
+    Subsequent calls: diff against the previous snapshot.
+
+    The baseline is NOT updated on mismatch (immutable baseline). This prevents
+    a corrupted file from silently overwriting the known-good baseline.
+    Use --accept-changes (accept_changes=True) to explicitly acknowledge
+    a new baseline after reviewing the diff.
 
     The verification itself is logged to the runs + verifications tables
     in the audit log, so the run history is queryable.
@@ -175,8 +182,15 @@ def verify_folder(
         common = prev_paths & new_paths
         modified = sorted(p for p in common if prev[p] != new[p])
 
-    # Persist the new snapshot (replaces old)
-    store.replace_verification_snapshot(folder_str, new_rows)
+    # Persist the new snapshot only when verification is clean, or when
+    # the user explicitly acknowledges the new baseline via --accept-changes.
+    # On mismatch without acceptance, the baseline is immutable — corruption
+    # does not suppress future detections by overwriting the known-good snapshot.
+    exit_code = _exit_code(
+        missing=bool(missing), modified=bool(modified), added=bool(added)
+    )
+    if exit_code == 0 or accept_changes:
+        store.replace_verification_snapshot(folder_str, new_rows)
 
     # Log the run
     command = f"media-mate verify {folder}"

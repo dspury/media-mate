@@ -54,10 +54,14 @@ class MediaProbe(BaseModel):
     width: int | None = None
     height: int | None = None
     frame_rate: float | None = None
+    r_frame_rate: float | None = None  # real frame rate for VFR detection
+    is_vfr: bool = False  # True when r_frame_rate differs meaningfully from frame_rate
     color_space: str | None = None
     color_transfer: str | None = None
     color_primaries: str | None = None
     bit_depth: int | None = None
+    sample_aspect_ratio: str | None = None  # e.g. "16:9", "2:1"
+    timecode: str | None = None  # e.g. "01:23:45:12"
     audio_codec: str | None = None
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
@@ -77,10 +81,15 @@ class OrganizeConfig(BaseModel):
     """Top-level organize configuration.
 
     Template placeholders: {root}, {codec_family}, {resolution_bucket},
-    {filename}, {ext}, {date}.
+    {filename}, {ext}, {date}, {source_relpath}.
+
+    Default template preserves the source folder structure under dest_root
+    ({source_relpath}), which matches how AEs and DITs think about media
+    (cards/scenes/takes). Use {codec_family}/{resolution_bucket} as
+    an alternative layout when you want codec+resolution grouping.
     """
 
-    template: str = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
+    template: str = "{root}/{source_relpath}/{filename}{ext}"
     on_conflict: Literal["skip", "overwrite", "rename"] = "skip"
     mode: Literal["copy", "move"] = "copy"
 
@@ -96,6 +105,7 @@ class OrganizeResult(BaseModel):
     duration_seconds: float
     dry_run: bool
     errors: list[str] = Field(default_factory=list)
+    span_warnings: list[str] = Field(default_factory=list)  # multi-file clip detections
 
 
 class OrganizeOpRecord(BaseModel):
@@ -105,6 +115,7 @@ class OrganizeOpRecord(BaseModel):
     run_id: int
     source_path: str
     destination_path: str
+    operation: Literal["copy", "move", "link"]  # link = hardlink (same-device)
     codec_family: str | None
     resolution_bucket: str | None
     file_size: int | None
@@ -125,6 +136,7 @@ class ProxyRequest(BaseModel):
     output_path: str
     codec: str = "ProRes422Proxy"
     target_height: int = 1080
+    probe: MediaProbe | None = None  # optional probe data for correct ffmpeg flags
 
 
 class ProxyResult(BaseModel):
@@ -149,16 +161,26 @@ class ProxyFailure(BaseModel):
     reason: str
 
 
+class ProxySkip(BaseModel):
+    """One file that was skipped because its proxy already existed."""
+
+    source_path: str
+    proxy_path: str
+
+
 class ProxyBatchResult(BaseModel):
     """Output of running proxy generation on a folder.
 
     skipped lists non-video files excluded from the batch (subtitles,
     sidecar databases, ...) — they are not failures.
+    already_existed lists files whose proxy was already present — also not
+    a failure; distinct from skipped so callers can distinguish them.
     """
 
     results: list[ProxyResult] = Field(default_factory=list)
     failures: list[ProxyFailure] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
+    already_existed: list[ProxySkip] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +382,7 @@ __all__ = [
     "ProxyRecord",
     "ProxyRequest",
     "ProxyResult",
+    "ProxySkip",
     "ResolveProjectResult",
     "ResolveProjectSpec",
     "RunRecord",

@@ -1,9 +1,9 @@
-# media-mate — Spec v0.1 (DRAFT)
+# media-mate — Spec v0.2.2
 
 > **Name:** `media-mate`
-> **Repo location:** `relay-dept-products/products/media-mate/` (sub-product of the relaydept catalog)
-> **Status:** Awaiting D's sign-off before any code is written.
-> **Author:** Bruce, on D's behalf.
+> **Repo location:** `dspury/media-mate`
+> **Version:** 0.2.2
+> **Status:** Released — stable
 
 ---
 
@@ -57,33 +57,69 @@ The killer demo: drop a folder of raw media in, run `media-mate run`, and walk a
 ## 5. v1 Scope — the six capabilities
 
 ### 5.1 Probe
-Extract structured metadata from any media file (video / audio / image) using `ffprobe`. Output is a `pydantic` model capturing: codec, container, resolution, frame rate, color space / transfer / primaries, bit depth, audio channels / sample rate / bit depth, duration, file size, modification time. JSON-serializable, queryable in SQLite.
+
+Extract structured metadata from any media file (video / audio / image) using `ffprobe`. Output is a `pydantic` model capturing:
+
+- `codec`, `container`, `width`, `height`, `frame_rate`, `avg_frame_rate`, `r_frame_rate`
+- `color_space`, `color_transfer`, `color_primaries`
+- `bit_depth` (from `bits_per_raw_sample`; falls back to parsing `pix_fmt` for formats that don't report it — e.g., ProRes)
+- `is_vfr` — `True` when `r_frame_rate` differs from `avg_frame_rate` by more than 1%; indicates variable-frame-rate source
+- `sample_aspect_ratio` (SAR) — e.g., `"2:1"` for anamorphic sources
+- `timecode` — extracted from `format.tags.timecode` or video stream `disposition.timecode`
+- `audio_codec`, `audio_channels`, `audio_sample_rate`, `audio_bit_depth`
+- `duration`, `file_size`, modification time
+
+JSON-serializable, queryable in SQLite.
 
 ### 5.2 Organize
-Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead. Each operation is logged; the manifest is reversible.
+
+Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead.
+
+**Note:** `--dry-run` is supported — preview the organization plan before touching any files.
+
+Each operation is logged; the manifest is reversible.
 
 ### 5.3 Proxy generation
-Generate edit-friendly proxies (default: ProRes 422 Proxy at 1080p, aspect-preserving) from raw camera formats. Output is always a `.mov` QuickTime file regardless of source container; non-video files are excluded by extension. Supports RED (.r3d), Blackmagic (.braw), MOV, MXF, ARI out of the box; any ffmpeg-readable format by extension. FFmpeg-only (no Resolve dependency for this capability).
+
+Generate edit-friendly proxies (default: ProRes 422 Proxy at 1080p, aspect-preserving) from raw camera formats. Output is always a `.mov` QuickTime file regardless of source container; non-video files are excluded by extension.
+
+**Proxy generation is probe-informed.** Before generating, the source is probed and the following metadata is used to build the correct ffmpeg command:
+
+- **Timecode** — passed via `-timecode` flag when source carries timecode
+- **Color metadata** — `-color_primaries`, `-color_trc`, `-colorspace` passed through from source
+- **SAR / anamorphic** — `setsar` applied after scale to restore correct display aspect ratio
+- **Audio codec** — PCM bit depth matched to source audio (`pcm_s16le` for 8–15-bit audio, `pcm_s32le` for 16+ bit)
+- **All audio tracks** — `-map 0:a` captures every audio track, not just the first
+
+On same-device organize operations, hardlinks are used instead of full copies to avoid wasted I/O.
+
+Supports MOV, MXF, MP4, and any ffmpeg-readable format. **RAW codecs (R3D/BRAW/ARI) are recognized by container but require vendor SDKs for decode — stock ffmpeg cannot decode them.**
 
 ### 5.4 DaVinci Resolve project creation
+
 Programmatically create a Resolve project (`.drp`) from a manifest + a config. Sets project resolution / frame rate / color space; creates a bin structure mirroring the source folder; imports media into the appropriate bins; creates a timeline pre-populated with proxy references. Graceful degradation: if Resolve isn't running/installed, emits a "ready to import" manifest instead and logs a warning.
 
 ### 5.5 Backup verification
+
 Compute fast checksums (xxhash by default; sha256 optional) of all files in a folder; store in SQLite. `media-mate verify` compares current state vs recorded state and reports missing / modified / added files with structured exit codes (0 = clean, 1 = missing, 2 = modified, 3 = added). Designed for shell scripting and cron.
 
+**Baseline mutability:** Verification does NOT automatically update the stored baseline on mismatch. A mismatch is always reported as an error until explicitly acknowledged. This prevents silent bit-rot: a corrupted file that was missed once does not suppress future detections by overwriting the baseline.
+
 ### 5.6 SQLite audit log (the system of record)
+
 Every operation writes to a local SQLite database (`~/.media-mate/media-mate.db` by default). Schema covers: runs, files, probes, proxies, projects, verifications, errors. Queryable via `media-mate log` subcommand (e.g., `media-mate log --since 1d --missing`).
 
 ---
 
 ## 6. Architecture
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                   media-mate CLI + TUI                       │
-│            (Click for CLI; Textual for TUI)                 │
+│            (Click for CLI; Textual for TUI)                  │
 │                                                               │
-│    CLI:   media-mate probe / organize / proxy / verify ... │
-│    TUI:   media-mate tui   (interactive full-screen app)   │
+│    CLI:   media-mate probe / organize / proxy / verify ...  │
+│    TUI:   media-mate tui   (interactive full-screen app)     │
 └──────┬──────────┬──────────┬──────────┬───────────┬──────────┘
        │          │          │          │           │
        ▼          ▼          ▼          ▼           ▼
@@ -103,7 +139,7 @@ Every operation writes to a local SQLite database (`~/.media-mate/media-mate.db`
             ┌─────────────────┐
             │  SQLite Audit   │
             │     Log         │
-            │ (system of      │
+            │ (system of     │
             │  record)        │
             └─────────────────┘
 ```
@@ -146,11 +182,20 @@ CREATE TABLE probes (
     width INTEGER,
     height INTEGER,
     frame_rate REAL,
+    avg_frame_rate REAL,
+    r_frame_rate REAL,
     color_space TEXT,
+    color_transfer TEXT,
+    color_primaries TEXT,
     bit_depth INTEGER,
-    duration REAL,
+    sample_aspect_ratio TEXT,        -- e.g. "2:1"
+    timecode TEXT,                   -- e.g. "01:23:45:12"
+    is_vfr INTEGER,                  -- 1 = true, 0 = false
+    audio_codec TEXT,
     audio_channels INTEGER,
     audio_sample_rate INTEGER,
+    audio_bit_depth INTEGER,
+    duration REAL,
     probed_at TEXT NOT NULL
 );
 
@@ -194,11 +239,35 @@ CREATE TABLE verifications (
     checksum_algo TEXT,              -- xxhash | sha256
     verified_at TEXT NOT NULL
 );
+
+-- Organize operations — one row per file moved or copied
+CREATE TABLE organize_ops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES runs(id),
+    source_path TEXT NOT NULL,
+    destination_path TEXT NOT NULL,
+    operation TEXT NOT NULL,          -- copy | move | link | skip
+    codec TEXT,                       -- detected source codec
+    resolution TEXT,                  -- detected source resolution
+    organized_at TEXT NOT NULL
+);
+
+-- Verification baseline snapshots — immutable; never mutated on mismatch
+CREATE TABLE verification_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder TEXT NOT NULL,
+    path TEXT NOT NULL,              -- relative path within folder
+    checksum TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    UNIQUE(folder, path)
+);
+CREATE INDEX idx_verif_snap_folder ON verification_snapshots(folder);
 ```
 
 ---
 
-## 8. CLI surface (example commands)
+## 8. CLI surface
 
 ```bash
 # Probe a single file
@@ -209,6 +278,9 @@ media-mate probe ./raw/
 
 # Organize a folder using rules in media-mate.toml
 media-mate organize ./raw/ --root ./organized/
+
+# Preview organize without touching files
+media-mate organize ./raw/ --root ./organized/ --dry-run
 
 # Generate proxies for everything in a folder
 media-mate proxy ./organized/ --codec ProRes422Proxy --height 1080
@@ -254,48 +326,41 @@ media-mate run ./raw/ --organize --proxy --resolve-project --verify
 ## 10. Repo layout
 
 ```
-relay-dept-products/
-├── README.md                       (catalog README — adds media-mate row)
-└── products/
-    ├── obsidian-kb-kit/
-    │   └── ... (existing)
-    └── media-mate/                 ← new
-        ├── README.md               (product description + quickstart)
-        ├── LICENSE                 (MIT)
-        ├── pyproject.toml
-        ├── media-mate.toml.example
-        ├── src/media_mate/
-        │   ├── __init__.py
-        │   ├── cli.py              (Click/Typer entrypoint)
-        │   ├── config.py           (media-mate.toml loader)
-        │   ├── probe.py            (ffprobe wrapper)
-        │   ├── organize.py         (file organizer)
-        │   ├── proxy.py            (proxy generation)
-        │   ├── resolve.py          (DaVinci project creation + ffmpeg fallback)
-        │   ├── verify.py           (checksum verification)
-        │   ├── log.py              (SQLite audit log)
-        │   ├── models.py           (pydantic schemas)
-        │   └── errors.py           (custom exceptions with exit codes)
-        ├── tests/
-        │   ├── test_probe.py
-        │   ├── test_organize.py
-        │   ├── test_proxy.py
-        │   ├── test_resolve.py
-        │   ├── test_verify.py
-        │   └── test_log.py
-        ├── examples/
-        │   └── sample-run.md       (worked example with sample output)
-        └── docs/
-            └── architecture.md
+media-mate/
+├── README.md
+├── LICENSE                 (MIT)
+├── pyproject.toml
+├── media-mate.toml.example
+├── SPEC.md                 (this document)
+├── src/media_mate/
+│   ├── __init__.py
+│   ├── cli.py              (Click entrypoint)
+│   ├── config.py           (media-mate.toml loader)
+│   ├── probe.py            (ffprobe wrapper)
+│   ├── organize.py         (file organizer)
+│   ├── proxy.py            (proxy generation)
+│   ├── resolve.py          (DaVinci project creation + ffmpeg fallback)
+│   ├── verify.py           (checksum verification)
+│   ├── log.py              (SQLite audit log)
+│   ├── models.py           (pydantic schemas)
+│   ├── errors.py           (custom exceptions with exit codes)
+│   └── tui.py              (Textual TUI)
+├── tests/
+│   ├── test_probe.py
+│   ├── test_organize.py
+│   ├── test_proxy.py
+│   ├── test_resolve.py
+│   ├── test_verify.py
+│   └── test_log.py
+├── examples/
+│   └── sample-run.md
+└── docs/
+    └── architecture.md
 ```
-
-CI lives at the relay-dept-products root (one workflow with `paths-filter` to run on `products/media-mate/**`).
 
 ---
 
 ## 11. Safety constraints (hard rules)
-
-Baked into the build. CI-enforced where possible.
 
 1. **No hardcoded paths.** Everything configurable via CLI args, env vars, or `media-mate.toml`.
 2. **No hostnames, IPs, NAS shares, or cloud account refs.** Anywhere in the code, docs, or tests.
@@ -307,20 +372,18 @@ Baked into the build. CI-enforced where possible.
 
 ---
 
-## 12. Versioning rule (from D)
+## 12. Versioning rule
 
 **media-mate ships as a beta indefinitely.** The version scheme is `MAJOR.MINOR.PATCH`:
 
 - **MAJOR** stays at **0** indefinitely. **Never bump to 1.0.0 without D's explicit approval.**
 - **PATCH** bumps (0.1.0 → 0.1.1) are fine for bug fixes — autonomous.
 - **MINOR** bumps (0.1.0 → 0.2.0) require D's approval — they're feature-signal events.
-- First tagged release: **0.1.0**.
-
-This mirrors the rule already established for other projects in the catalog.
+- **First tagged release:** 0.1.0.
 
 ---
 
-## 13. PyPI publish (build target)
+## 13. PyPI publish
 
 media-mate ships to PyPI under the name `media-mate`. Install becomes:
 
@@ -329,19 +392,18 @@ pip install media-mate
 media-mate --help
 ```
 
-- Python package import name: `media_mate` (Python requires underscores)
-- CLI command: `media-mate` (matches the project name)
-- PyPI package name: `media-mate` (PyPI accepts hyphens)
+- Python package import name: `media_mate`
+- CLI command: `media-mate`
+- PyPI package name: `media-mate`
 
-Build via `python -m build`, publish via `twine upload` (or `pyproject.toml`-driven trusted publishing on GH Actions). Trusted publishing preferred — no API tokens in long-lived storage.
+Build via `python -m build`, publish via `twine upload` (or `pyproject.toml`-driven trusted publishing on GH Actions).
 
 ---
 
 ## 14. GitHub Actions CI
 
-Workflow at `relay-dept-products/.github/workflows/media-mate.yml` with `paths-filter` so it only runs when `products/media-mate/**` changes.
+Workflow at `.github/workflows/ci.yml`. Matrix:
 
-Matrix:
 - Python 3.10, 3.11, 3.12
 - Each matrix entry: install deps → `pytest` → `ruff check` → `ruff format --check`
 
@@ -351,8 +413,6 @@ Plus a smoke test that runs `media-mate --help` and a small end-to-end probe of 
 
 ## 15. Open questions — resolved during build
 
-These were TBD at spec time and resolved during implementation:
-
 1. **Click vs Typer.** → **Click.** Chosen for its maturity, stable API, and rich output ecosystem (Rich). Typer rejected.
 2. **Checksum algo default.** → **xxhash.** Implemented as default; sha256 available as opt-in. Speed difference is real and meaningful for large folders.
 3. **Default organize rule.** → **codec_family + resolution_bucket.** Date rejected — it creates messy paths for multi-day shoots. The two-tier structure is clean and professional.
@@ -360,7 +420,7 @@ These were TBD at spec time and resolved during implementation:
 
 ---
 
-## 16. Future work (v2+ candidates, not v1)
+## 16. Future work (v2+ candidates)
 
 - Scene detection (PySceneDetect)
 - Audio loudness analysis (LUFS / true peak)
@@ -368,8 +428,8 @@ These were TBD at spec time and resolved during implementation:
 - Resolve round-trip render (export EDL → render → verify)
 - Watch-folder mode (run on file appearance)
 - Web UI (FastAPI + simple HTML)
-- Multi-folder batch verification with parallel hashing
 - Cloud-storage adapters (S3, GCS) — careful with the "zero cost" mandate
+- Full spanned/multi-file clip model (logical clip abstraction across organize/proxy/resolve)
 
 ---
 
@@ -377,8 +437,8 @@ These were TBD at spec time and resolved during implementation:
 
 All items shipped in v0.1.0:
 
-1. ✅ Scaffold `products/media-mate/` (pyproject.toml, src layout, tests/, ruff config)
-2. ✅ CI workflow at relay-dept-products root with paths-filter
+1. ✅ Scaffold `media-mate/` (pyproject.toml, src layout, tests/, ruff config)
+2. ✅ CI workflow with paths-filter
 3. ✅ `models.py` + `log.py` (the data layer everything else depends on)
 4. ✅ `probe.py` + tests (simplest capability, validates the pipeline)
 5. ✅ `organize.py` + tests (depends on probe)
@@ -387,14 +447,112 @@ All items shipped in v0.1.0:
 8. ✅ `resolve.py` + tests (most complex, integrate last)
 9. ✅ `cli.py` (wires it all together)
 10. ✅ README + examples + docs
-11. ✅ relay-dept-products README updated
-12. ⚠️ Tag `0.1.0`, publish to PyPI — **Skipped.** GitHub release only; PyPI publish deferred.
-
-**Estimated build time:** ~1 focused session for v1, plus iteration. Probably 3–5 working sessions to ship-quality.
+11. ✅ GitHub release only; PyPI publish deferred
 
 ---
 
-## 18. What you sign off on by approving this doc
+## 18. Changes in v0.2.x
+
+### v0.2.2 — Bug fixes and probe enrichment
+
+**Status:** Released.
+
+#### Bug fixes
+
+- **Proxy command was probe-ignorant.** `generate_proxy()` never passed `request.probe` to `_ffmpeg_cmd()`. Every proxy was generated with safe defaults regardless of source metadata. Timecode, color passthrough, SAR correction, and source-matched PCM bit depth were all unreachable from the public API. Fixed: probe is now passed through.
+- **Batch proxy probing always silently failed.** `ffprobe_path = find_ffmpeg(cfg)` was used instead of `find_ffprobe(cfg)`. ffmpeg rejects ffprobe-only arguments and exits with an error, which was silently swallowed. All batch proxy generation was running without probe data. Fixed: correct `find_ffprobe` now used.
+- **Skip-existing proxies logged as failures.** When a proxy already existed and `--skip-existing` was set, the result was recorded as a `ProxyFailure`. Now recorded as `already_existed` — a distinct outcome, not a failure.
+- **Sidecar files created probe noise.** `probe_path()` recorded every file matching known extensions, including `.pek`, `.pbf`, `.CTox`, and other non-media sidecar formats that ffprobe cannot parse. Now only files that ffprobe can actually parse are recorded.
+- **`organize --dry-run` not exposed on CLI.** The underlying `organize_path()` supported `dry_run`, but the CLI never exposed it. Fixed: `--dry-run` is now a CLI flag on the organize command.
+
+#### New capabilities
+
+- **Bit depth from `pix_fmt`:** `MediaProbe.bit_depth` now falls back to parsing the `pix_fmt` field when `bits_per_raw_sample` is absent (common with ProRes and other intermediate codecs). Maps `yuv420p10le` → 10-bit, `yuv422p8` → 8-bit, etc.
+- **VFR detection:** `MediaProbe` now captures `r_frame_rate` (real frame rate) alongside `avg_frame_rate` (nominal). `is_vfr` is `True` when they diverge by more than 1%. VFR sources (phone recordings, screen captures, action cams) are now flagged in probe output.
+- **Timecode extraction:** `MediaProbe.timecode` is extracted from `format.tags.timecode` or video stream `disposition.timecode`. Proxies now carry timecode when the source has it.
+- **SAR / anamorphic support:** `MediaProbe.sample_aspect_ratio` is captured from the video stream. Proxy generation now applies `setsar` to restore correct display aspect ratio after scaling, preventing anamorphic sources from producing wrong-shaped proxies.
+- **Audio bit depth from probe:** Source audio bit depth is extracted from ffprobe stream data and used to select `pcm_s16le` (8–15-bit audio) or `pcm_s32le` (16+ bit audio) in the proxy command.
+- **`--dry-run` on organize:** CLI preview mode. Files are planned but not moved or copied.
+
+#### Data model changes
+
+- `MediaProbe`: new fields — `is_vfr`, `avg_frame_rate`, `r_frame_rate`, `sample_aspect_ratio`, `timecode`, `audio_codec`, `audio_channels`, `audio_sample_rate`, `audio_bit_depth`
+- `ProxyBatchResult`: new field `already_existed: list[ProxySkip]` — proxies skipped because they already existed, distinct from failures
+- New model: `ProxySkip` — records a source path and proxy path for each skipped file
+
+#### Resolved issues
+
+Closed in v0.2.2: #7 (SAR), #17 (--dry-run), #19 (proxy drops TC/audio), #25 (editorial fields), #26 (bit depth), #27 (VFR), #28 (skip-existing), #29 (sidecar noise).
+
+---
+
+## 19. Open issues — v0.3 candidates
+
+The following issues are acknowledged and targeted for v0.3. Each requires a spec change or design decision before implementation.
+
+### #8 — VFR causes audio sync drift in proxies
+
+**Severity:** Real bug.
+**Recommendation:** Add `-fps_mode cfr` to all proxy generation (forcing constant frame rate from variable-frame-rate sources). This normalizes all proxies to CFR regardless of source — safe because proxies are throwaway edit media. Keep `is_vfr` in the probe for visibility; the proxy command just normalizes.
+**Versioning impact:** None (behavior change is a strict improvement).
+**Status:** Worth doing now.
+
+### #11 — Same-volume I/O and no parallelism
+
+**Severity:** Partial.
+**Recommendation:** Two parts:
+1. **Hardlink on same device** — when source and dest are on the same volume, use `os.link()` instead of `shutil.copy2()`. Zero I/O overhead, originals stay immutable. Implemented in organize. This is the 80% solution.
+2. **Device-aware parallelism** — closed as won't-fix for v0.3. Adds significant complexity for marginal gain on a single-operator CLI.
+**Versioning impact:** None (hardlink is an optimization, not a behavior change).
+**Status:** Hardlink: worth doing now. Parallelism: wont-fix.
+
+### #20 — Resolve: empty project
+
+**Severity:** Spec violation (promised in §5.4).
+**Recommendation:** Implement `media_pool.ImportMedia()` and `CreateTimelineFromClips()` via the live Resolve API, or demote the capability to "manifest-first" and make the manifest the primary deliverable. The manifest layer is solid; the live-API path produces hollow projects.
+**Versioning impact:** Yes — this is the headline Resolve feature.
+**Status:** Worth doing now, but requires either Resolve API access for testing or a clear decision to demote to manifest-only.
+
+### #21 — Verify silently masks corruption via rolling baseline
+
+**Severity:** Serious — undermines the core integrity promise.
+**Recommendation:** Split "snapshot" (write baseline) from "verify" (compare, never mutate on mismatch). Currently `replace_verification_snapshot()` is called unconditionally, so a corrupted file's checksum overwrites the good baseline and future runs report clean. With this fix, corruption stays flagged until explicitly acknowledged with `--accept-changes`.
+**Versioning impact:** None — this is fixing a silent correctness bug, not changing advertised behavior.
+**Status:** Worth doing now (one-line change in `verify.py`).
+
+### #22 — Organize-by-codec fights AE/DIT mental model
+
+**Severity:** Real UX problem.
+**Recommendation:** Change the default organize template from `by_codec` to source-structure-preserving (e.g., `{root}/{date}/{filename}{ext}` or simply mirror source folder under dest). The template system already supports this — it's a default-value change. Codec/resolution remain available as opt-in templates.
+**Versioning impact:** Yes — changes the default output layout. Existing configs using explicit templates are unaffected.
+**Status:** Worth doing now (default change, minimal code).
+
+### #23 — Spanned and multi-file clips split
+
+**Severity:** Real.
+**Recommendation:** Two parts:
+1. **Keep groups together** — when a multi-file clip is detected (by naming convention), never split the group across organize destinations. Emit a warning so the user knows. This is largely free if #22's source-preserving default is implemented.
+2. **Full spanned-clip model** — v1.0 candidate. Requires a logical clip abstraction that tracks group membership through organize/proxy/resolve. Retrofitting this into the current per-file model is a significant architecture change.
+**Versioning impact:** Partial (warning is none; full model is breaking).
+**Status:** Warning: worth doing now. Full model: v1.0.
+
+### #24 — R3D/BRAW/ARI fail with stock ffmpeg
+
+**Severity:** Truth-in-advertising bug.
+**Recommendation:** Add a pre-check that detects `.r3d`, `.braw`, and `.ari` extensions and emits a clear error: *"R3D decode requires the RED SDK; not supported by stock ffmpeg."* Correct the README and SPEC.md §5.3 to say "container recognized; decode requires vendor plugins." Tiny fix, high credibility value.
+**Versioning impact:** None (spec correction + error message).
+**Status:** Worth doing now.
+
+### #30 — Manifest and live-API bin structure mismatch
+
+**Severity:** Real inconsistency.
+**Recommendation:** Fold into #20. When implementing the live-API import path, fix `_build_bin_tree` to produce nested folder structures that match the manifest's `resolve_bin_structure`. If recursive bins are not yet supported, deliberately flatten both paths to first-level bins for consistency.
+**Versioning impact:** Folded into #20.
+**Status:** Worth doing, folded into #20.
+
+---
+
+## 20. What you sign off on by approving this doc
 
 All items below were approved at spec time and shipped in v0.1.0:
 
@@ -406,8 +564,15 @@ All items below were approved at spec time and shipped in v0.1.0:
 - Safety constraints in §11
 - Versioning rule in §12 (MAJOR=0 until D approves)
 - License: MIT
-- Repo location: `relay-dept-products/products/media-mate/`
+- Repo location: `dspury/media-mate`
 - Name: `media-mate`
-- First tagged version: `0.1.0`
+- First tagged version: 0.1.0
+
+All items below were approved and shipped in v0.2.2:
+
+- Bug fixes in §18
+- New capabilities in §18
+- Data model additions in §18
+- v0.3 candidates as documented in §19
 
 Shipped as approved ✓
