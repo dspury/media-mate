@@ -23,11 +23,13 @@ from pathlib import Path
 from media_mate.log import LogStore
 from media_mate.models import (
     MediaMateConfig,
+    MediaProbe,
     ProxyBatchResult,
     ProxyFailure,
     ProxyRecord,
     ProxyRequest,
     ProxyResult,
+    ProxySkip,
     RunStatus,
 )
 
@@ -85,31 +87,89 @@ def _profile_for(codec: str) -> int:
     return profile
 
 
+def _audio_codec_for(probe: MediaProbe | None) -> str:
+    """Pick the right PCM codec for audio bit depth.
+
+    Uses the source audio bit depth when available (from probe), otherwise
+    falls back to pcm_s16le as the safe default.
+    """
+    if probe and probe.audio_bit_depth:
+        depth = probe.audio_bit_depth
+        if depth >= 24:
+            return "pcm_s32le"
+        if depth >= 16:
+            return "pcm_s16le"
+    return "pcm_s16le"
+
+
 def _ffmpeg_cmd(
     ffmpeg_path: str,
     source: Path,
     output: Path,
     codec: str,
     target_height: int,
+    probe: MediaProbe | None = None,
 ) -> list[str]:
-    """Build the ffmpeg command for proxy generation."""
+    """Build the ffmpeg command for proxy generation.
+
+    Uses probe data to:
+    - Map all audio tracks (not just the first)
+    - Preserve timecode via -timecode
+    - Pass through color metadata (color_space, color_transfer, color_primaries)
+    - Set SAR from source to handle anamorphic footage correctly
+    - Pick the right PCM bit depth from source audio
+    """
     profile = _profile_for(codec)
-    # scale=-2:H means "width such that height=H, preserving aspect ratio, even number"
-    return [
+
+    cmd: list[str] = [
         ffmpeg_path,
-        "-y",  # overwrite output (defensive; we pre-check existence in batch mode)
+        "-y",
         "-i",
         str(source),
-        "-vf",
-        f"scale=-2:{target_height}",
-        "-c:v",
-        "prores_ks",
-        "-profile:v",
-        str(profile),
-        "-c:a",
-        "pcm_s16le",
-        str(output),
     ]
+
+    # Timecode — use probe data if available
+    timecode = probe.timecode if probe else None
+    if timecode:
+        cmd += ["-timecode", timecode]
+
+    # Build video filter chain
+    filters: list[str] = []
+
+    # Scale to target height, preserving aspect ratio.
+    # scale=-2:H forces width to be even (required for many codecs)
+    # and accepts any source SAR — we add setdar after scale to
+    # restore the correct display aspect ratio.
+    filters.append(f"scale=-2:{target_height}")
+
+    # Restore SAR from source if it differs from 1:1 (anamorphic footage)
+    if probe and probe.sample_aspect_ratio and probe.sample_aspect_ratio != "1:1":
+        sar = probe.sample_aspect_ratio
+        filters.append(f"setsar={sar}")
+
+    cmd += ["-vf", ",".join(filters)]
+
+    # Video codec
+    cmd += ["-c:v", "prores_ks", "-profile:v", str(profile)]
+
+    # Color metadata passthrough
+    if probe and (probe.color_space or probe.color_transfer or probe.color_primaries):
+        if probe.color_primaries:
+            cmd += ["-color_primaries", probe.color_primaries]
+        if probe.color_transfer:
+            cmd += ["-color_trc", probe.color_transfer]
+        if probe.color_space:
+            cmd += ["-colorspace", probe.color_space]
+
+    # Audio: map all audio tracks and preserve bit depth
+    # -map 0:a maps ALL audio streams from input 0
+    cmd += ["-map", "0:a"]
+
+    audio_codec = _audio_codec_for(probe)
+    cmd += ["-c:a", audio_codec]
+
+    cmd.append(str(output))
+    return cmd
 
 
 def _probe_output_metadata(output: Path) -> tuple[int, int, float]:
@@ -151,7 +211,7 @@ def generate_proxy(
     except OSError as e:
         raise ProxyError(source, f"cannot create output directory {output.parent}: {e}") from e
 
-    cmd = _ffmpeg_cmd(fp, source, output, request.codec, request.target_height)
+    cmd = _ffmpeg_cmd(fp, source, output, request.codec, request.target_height, probe=request.probe)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -255,25 +315,37 @@ def generate_proxies(
         return ProxyBatchResult(skipped=skipped)
 
     ffmpeg_path = find_ffmpeg(cfg)
+    from media_mate.probe import ProbeError, find_ffprobe, probe_file
+
+    ffprobe_path = find_ffprobe(cfg)
     command = f"media-mate proxy {source} --out {output_dir}"
     run_id = store.start_run(command)
 
     results: list[ProxyResult] = []
-    errors: list[tuple[Path, str]] = []
+    failures: list[tuple[Path, str]] = []
+    already_existed: list[tuple[Path, Path]] = []
 
     for f, rel in files:
         out = (output_dir / rel).with_suffix(".mov")
 
         try:
             if out.exists():
-                errors.append((f, f"proxy already exists at {out}"))
+                already_existed.append((f, out))
                 continue
+
+            # Probe the source to get accurate metadata for ffmpeg flags.
+            probe: MediaProbe | None = None
+            try:
+                probe = probe_file(f, ffprobe_path=ffprobe_path)
+            except ProbeError:
+                pass  # proceed without probe data; _ffmpeg_cmd will use safe defaults
 
             request = ProxyRequest(
                 source_path=str(f),
                 output_path=str(out),
                 codec=cfg.proxy_codec,
                 target_height=cfg.proxy_height,
+                probe=probe,
             )
             result = generate_proxy(request, ffmpeg_path=ffmpeg_path)
             results.append(result)
@@ -297,25 +369,26 @@ def generate_proxies(
                 )
             )
         except ProxyError as e:
-            errors.append((e.path, e.reason))
+            failures.append((e.path, e.reason))
         except OSError as e:
-            errors.append((f, str(e)))
+            failures.append((f, str(e)))
 
-    if not errors:
+    if not failures:
         status = RunStatus.SUCCESS
         error_msg = None
     elif results:
         status = RunStatus.PARTIAL
-        error_msg = _format_errors(errors)
+        error_msg = _format_errors(failures)
     else:
         status = RunStatus.FAILED
-        error_msg = _format_errors(errors)
+        error_msg = _format_errors(failures)
 
     store.finish_run(run_id, status, error_msg)
     return ProxyBatchResult(
         results=results,
-        failures=[ProxyFailure(source_path=str(p), reason=r) for p, r in errors],
+        failures=[ProxyFailure(source_path=str(p), reason=r) for p, r in failures],
         skipped=skipped,
+        already_existed=[ProxySkip(source_path=str(s), proxy_path=str(o)) for s, o in already_existed],
     )
 
 

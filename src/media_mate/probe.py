@@ -109,6 +109,69 @@ def _parse_frame_rate(rate: str | None) -> float | None:
         return None
 
 
+_BIT_DEPTH_FROM_PIX_FMT: dict[str, int] = {
+    # 8-bit
+    "yuv420p": 8,
+    "yuv422p": 8,
+    "yuv444p": 8,
+    "yuv410p": 8,
+    "yuv411p": 8,
+    "yuvj420p": 8,
+    "yuvj422p": 8,
+    "yuvj444p": 8,
+    "rgb24": 8,
+    "bgr24": 8,
+    "gbrp": 8,
+    # 10-bit
+    "yuv420p10le": 10,
+    "yuv422p10le": 10,
+    "yuv444p10le": 10,
+    "yuv420p10be": 10,
+    "yuv422p10be": 10,
+    "yuv444p10be": 10,
+    "yuv420p12le": 12,
+    "yuv422p12le": 12,
+    "yuv444p12le": 12,
+    "rgb48be": 16,
+    "rgb48le": 16,
+    "bgr48be": 16,
+    "bgr48le": 16,
+}
+
+
+def _bit_depth_from_pix_fmt(pix_fmt: str | None) -> int | None:
+    """Derive bit depth from a pix_fmt string like 'yuv420p10le'."""
+    if not pix_fmt:
+        return None
+    return _BIT_DEPTH_FROM_PIX_FMT.get(pix_fmt.lower())
+
+
+def _is_vfr(avg: float | None, rfr: float | None) -> bool:
+    """Return True when r_frame_rate differs from avg_frame_rate by > 1 percent."""
+    if avg is None or rfr is None or avg == 0:
+        return False
+    return abs(rfr - avg) / avg > 0.01
+
+
+def _extract_timecode(raw: dict[str, Any]) -> str | None:
+    """Extract timecode from parsed ffprobe JSON.
+
+    Checks:
+    - format.tags.timecode (or TIMEcode)
+    - video stream disposition.timecode
+    """
+    tags = (raw.get("format") or {}).get("tags") or {}
+    tc = tags.get("timecode") or tags.get("TIMEcode")
+    if tc:
+        return tc
+    for stream in raw.get("streams") or []:
+        if stream.get("codec_type") == "video":
+            tc = stream.get("disposition", {}).get("timecode")
+            if tc:
+                return tc
+    return None
+
+
 def _parse_ffprobe_output(path: Path, raw: dict[str, Any]) -> MediaProbe:
     """Map ffprobe's JSON output to a MediaProbe."""
     fmt = raw.get("format") or {}
@@ -130,17 +193,35 @@ def _parse_ffprobe_output(path: Path, raw: dict[str, Any]) -> MediaProbe:
     if fmt_size is not None:
         file_size = fmt_size
 
+    # Frame rates
+    avg_frame_rate = _parse_frame_rate(video.get("avg_frame_rate")) if video else None
+    r_frame_rate = _parse_frame_rate(video.get("r_frame_rate")) if video else None
+    is_vfr = _is_vfr(avg_frame_rate, r_frame_rate)
+
+    # Bit depth: prefer bits_per_raw_sample; fall back to pix_fmt parsing
+    bit_depth: int | None = None
+    if video:
+        raw_bits = _safe_int(video.get("bits_per_raw_sample"))
+        if raw_bits:
+            bit_depth = raw_bits
+        else:
+            bit_depth = _bit_depth_from_pix_fmt(video.get("pix_fmt"))
+
     return MediaProbe(
         path=str(path),
         container=fmt.get("format_name"),
         video_codec=video.get("codec_name") if video else None,
         width=_safe_int(video.get("width")) if video else None,
         height=_safe_int(video.get("height")) if video else None,
-        frame_rate=_parse_frame_rate(video.get("avg_frame_rate")) if video else None,
+        frame_rate=avg_frame_rate,
+        r_frame_rate=r_frame_rate,
+        is_vfr=is_vfr,
         color_space=video.get("color_space") if video else None,
         color_transfer=video.get("color_transfer") if video else None,
         color_primaries=video.get("color_primaries") if video else None,
-        bit_depth=_safe_int(video.get("bits_per_raw_sample")) if video else None,
+        bit_depth=bit_depth,
+        sample_aspect_ratio=video.get("sample_aspect_ratio") if video else None,
+        timecode=_extract_timecode(raw),
         audio_codec=audio.get("codec_name") if audio else None,
         audio_channels=_safe_int(audio.get("channels")) if audio else None,
         audio_sample_rate=_safe_int(audio.get("sample_rate")) if audio else None,
