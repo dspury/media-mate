@@ -10,6 +10,14 @@ __pycache__/
 htmlcov/
 *.cover
 
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Virtualenv
+.venv/
+
 # pip editable install artifacts
 *.egg-info/
 dist/
@@ -20,7 +28,9 @@ build/
 .idea/
 *.swp
 
-# Archived docs (superseded by SPEC.md and README.md)
+# Archived docs (superseded by SPEC.md and README.md).
+# Note: only affects UNTRACKED files; files already in history at this path
+# stay tracked. To re-archive a new spec, git-mv it in rather than `git add`.
 /docs/archive/
 
 # Demo pipeline output — regenerated on each run
