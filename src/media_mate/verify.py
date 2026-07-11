@@ -186,9 +186,7 @@ def verify_folder(
     # the user explicitly acknowledges the new baseline via --accept-changes.
     # On mismatch without acceptance, the baseline is immutable — corruption
     # does not suppress future detections by overwriting the known-good snapshot.
-    exit_code = _exit_code(
-        missing=bool(missing), modified=bool(modified), added=bool(added)
-    )
+    exit_code = _exit_code(missing=bool(missing), modified=bool(modified), added=bool(added))
     if exit_code == 0 or accept_changes:
         store.replace_verification_snapshot(folder_str, new_rows)
 

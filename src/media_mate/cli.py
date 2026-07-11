@@ -42,7 +42,7 @@ DEFAULT_DB_PATH = Path.home() / ".media-mate" / "media-mate.db"
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="media-mate")
 @click.option(
     "--db",
@@ -59,12 +59,25 @@ DEFAULT_DB_PATH = Path.home() / ".media-mate" / "media-mate.db"
     envvar="MEDIA_MATE_CONFIG",
     help="Path to media-mate.toml config file.",
 )
+@click.option(
+    "--no-tui",
+    is_flag=True,
+    help="Stay in CLI mode when no subcommand is supplied.",
+)
 @click.pass_context
-def main(ctx: click.Context, db: Path, config_path: Path | None) -> None:
+def main(ctx: click.Context, db: Path, config_path: Path | None, no_tui: bool) -> None:
     """media-mate: zero-cost CLI for post-production media ops."""
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = db
     ctx.obj["config"] = load_config(config_path)
+    ctx.obj["config_path"] = config_path
+    if ctx.invoked_subcommand is None:
+        if no_tui:
+            click.echo(ctx.get_help())
+        else:
+            from media_mate.tui import main as tui_main
+
+            tui_main(db, config_path)
 
 
 def _get_store(ctx: click.Context) -> LogStore:
@@ -92,7 +105,7 @@ def _get_config(ctx: click.Context) -> MediaMateConfig:
 def probe(ctx: click.Context, path: Path) -> None:
     """Probe a file or directory and write results to the audit log."""
     store = _get_store(ctx)
-    results = probe_path(path, store)
+    results = probe_path(path, store, config=_get_config(ctx))
 
     console = Console()
     console.print(f"[green]Probed {len(results)} file(s)[/green]")
@@ -311,7 +324,7 @@ def resolve_create(
 def verify(ctx: click.Context, path: Path, accept_changes: bool) -> None:
     """Verify a folder against its previous checksum snapshot."""
     store = _get_store(ctx)
-    report = verify_folder(path, store, accept_changes=accept_changes)
+    report = verify_folder(path, store, config=_get_config(ctx), accept_changes=accept_changes)
 
     console = Console()
     if report.is_clean:
@@ -451,7 +464,7 @@ def run_cmd(
 
     # Step 1: probe (always)
     console.print("[bold]Step 1: probe[/bold]")
-    results = probe_path(path, store)
+    results = probe_path(path, store, config=cfg)
     console.print(f"  Probed {len(results)} file(s)")
 
     # Step 2: organize (optional)
@@ -499,7 +512,7 @@ def run_cmd(
     # Step 5: verify (optional)
     if do_verify:
         console.print("[bold]Step 5: verify[/bold]")
-        report = verify_folder(organized_root or path, store)
+        report = verify_folder(organized_root or path, store, config=cfg)
         if report.is_clean:
             console.print(f"  Clean: {report.files_checked} file(s) verified")
         else:
@@ -517,4 +530,4 @@ def tui(ctx: click.Context) -> None:
     """Launch the interactive TUI (alternative to subcommands)."""
     from media_mate.tui import main as tui_main
 
-    tui_main()
+    tui_main(ctx.obj["db_path"], ctx.obj["config_path"])

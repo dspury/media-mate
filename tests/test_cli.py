@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +33,17 @@ def _invoke_with_db(runner: CliRunner, args: list[str], db: Path) -> object:
 
 
 class TestTopLevel:
+    def test_no_tui_prints_cli_help(self, runner: CliRunner) -> None:
+        result = runner.invoke(main, ["--no-tui"])
+        assert result.exit_code == 0
+        assert "Commands:" in result.output
+
+    def test_no_args_launches_tui(self, runner: CliRunner) -> None:
+        with patch("media_mate.tui.main") as mock_tui:
+            result = runner.invoke(main, [])
+        assert result.exit_code == 0
+        mock_tui.assert_called_once()
+
     def test_version(self, runner: CliRunner) -> None:
         from media_mate import __version__
 
@@ -55,6 +66,23 @@ class TestTopLevel:
 
 
 class TestProbeCommand:
+    def test_probe_uses_loaded_config(
+        self, runner: CliRunner, tmp_path: Path, tmp_db: Path
+    ) -> None:
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        config = tmp_path / "media-mate.toml"
+        config.write_text('ffmpeg_path = "/custom/ffmpeg"\n')
+
+        with patch("media_mate.cli.probe_path", return_value=[]) as mock_probe:
+            result = runner.invoke(
+                main,
+                ["--db", str(tmp_db), "--config", str(config), "probe", str(raw)],
+            )
+
+        assert result.exit_code == 0
+        assert mock_probe.call_args.kwargs["config"].ffmpeg_path == "/custom/ffmpeg"
+
     def test_probe_empty_dir(self, runner: CliRunner, tmp_path: Path, tmp_db: Path) -> None:
         empty = tmp_path / "raw"
         empty.mkdir()
@@ -261,6 +289,35 @@ class TestResolveCommand:
 
 
 class TestVerifyCommand:
+    def test_verify_uses_loaded_config(
+        self, runner: CliRunner, tmp_path: Path, tmp_db: Path
+    ) -> None:
+        folder = tmp_path / "data"
+        folder.mkdir()
+        config = tmp_path / "media-mate.toml"
+        config.write_text('checksum_algo = "sha256"\n')
+
+        with patch("media_mate.cli.verify_folder") as mock_verify:
+            from media_mate.models import ChecksumAlgo, VerificationReport
+
+            mock_verify.return_value = VerificationReport(
+                folder=str(folder),
+                files_checked=0,
+                files_missing=0,
+                files_modified=0,
+                files_added=0,
+                checksum_algo=ChecksumAlgo.SHA256,
+                verified_at=datetime.now(UTC),
+                exit_code=0,
+            )
+            result = runner.invoke(
+                main,
+                ["--db", str(tmp_db), "--config", str(config), "verify", str(folder)],
+            )
+
+        assert result.exit_code == 0
+        assert mock_verify.call_args.kwargs["config"].checksum_algo == ChecksumAlgo.SHA256
+
     def test_verify_clean(self, runner: CliRunner, tmp_path: Path, tmp_db: Path) -> None:
         folder = tmp_path / "data"
         folder.mkdir()

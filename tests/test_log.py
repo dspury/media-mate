@@ -47,6 +47,40 @@ class TestSchema:
         s.initialize()  # second call must not raise
         assert (tmp_path / "media-mate.db").exists()
 
+    def test_initialize_migrates_legacy_organize_operations(self, tmp_path) -> None:
+        """The v0.2.2 audit column is added to pre-existing databases."""
+        import sqlite3
+
+        db_path = tmp_path / "legacy.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE organize_ops ("
+                "id INTEGER PRIMARY KEY, run_id INTEGER, source_path TEXT NOT NULL, "
+                "destination_path TEXT NOT NULL, codec_family TEXT, "
+                "resolution_bucket TEXT, file_size INTEGER, moved_at TEXT NOT NULL)"
+            )
+
+        legacy = LogStore(db_path)
+        legacy.initialize()
+        run_id = legacy.start_run("media-mate organize ./raw")
+        legacy.insert_organize_op(
+            OrganizeOpRecord(
+                run_id=run_id,
+                source_path="/in/clip.mov",
+                destination_path="/out/clip.mov",
+                codec_family="prores",
+                resolution_bucket="1080p",
+                file_size=1024,
+                moved_at=datetime.now(UTC),
+            )
+        )
+
+        with sqlite3.connect(db_path) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(organize_ops)")}
+            operation = conn.execute("SELECT operation FROM organize_ops").fetchone()[0]
+        assert "operation" in columns
+        assert operation == "copy"
+
 
 class TestRuns:
     def test_start_run_returns_id(self, store: LogStore) -> None:

@@ -160,15 +160,15 @@ def _extract_timecode(raw: dict[str, Any]) -> str | None:
     - format.tags.timecode (or TIMEcode)
     - video stream disposition.timecode
     """
-    tags = (raw.get("format") or {}).get("tags") or {}
+    tags: dict[str, Any] = (raw.get("format") or {}).get("tags") or {}
     tc = tags.get("timecode") or tags.get("TIMEcode")
     if tc:
-        return tc
+        return str(tc)
     for stream in raw.get("streams") or []:
         if stream.get("codec_type") == "video":
-            tc = stream.get("disposition", {}).get("timecode")
-            if tc:
-                return tc
+            stream_timecode: Any = stream.get("disposition", {}).get("timecode")
+            if stream_timecode:
+                return str(stream_timecode)
     return None
 
 
@@ -202,10 +202,7 @@ def _parse_ffprobe_output(path: Path, raw: dict[str, Any]) -> MediaProbe:
     bit_depth: int | None = None
     if video:
         raw_bits = _safe_int(video.get("bits_per_raw_sample"))
-        if raw_bits:
-            bit_depth = raw_bits
-        else:
-            bit_depth = _bit_depth_from_pix_fmt(video.get("pix_fmt"))
+        bit_depth = raw_bits or _bit_depth_from_pix_fmt(video.get("pix_fmt"))
 
     return MediaProbe(
         path=str(path),

@@ -306,8 +306,10 @@ def organize_path(
 
             if not dry_run:
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                op: Literal["copy", "move", "link"]
                 if do_move:
                     shutil.move(str(f), str(dest))
+                    op = "move"
                 else:
                     # Same-device: use os.link() for zero-copy.
                     # Both paths must be on the same filesystem (stat st_dev).
@@ -316,7 +318,7 @@ def organize_path(
                     if same_device:
                         try:
                             os.link(str(f), str(dest))
-                            op: Literal["copy", "move", "link"] = "link"
+                            op = "link"
                         except OSError:
                             # Fallback to copy if hardlink fails (cross-fs, permissions)
                             shutil.copy2(str(f), str(dest))
@@ -325,18 +327,18 @@ def organize_path(
                         shutil.copy2(str(f), str(dest))
                         op = "copy"
 
-                    store.insert_organize_op(
-                        OrganizeOpRecord(
-                            run_id=run_id,
-                            source_path=str(f),
-                            destination_path=str(dest),
-                            operation=op,
-                            codec_family=family,
-                            resolution_bucket=bucket,
-                            file_size=size,
-                            moved_at=datetime.now(UTC),
-                        )
+                store.insert_organize_op(
+                    OrganizeOpRecord(
+                        run_id=run_id,
+                        source_path=str(f),
+                        destination_path=str(dest),
+                        operation=op,
+                        codec_family=family,
+                        resolution_bucket=bucket,
+                        file_size=size,
+                        moved_at=datetime.now(UTC),
                     )
+                )
 
             files_moved += 1
             bytes_moved += size
@@ -377,9 +379,9 @@ def organize_path(
 
 __all__ = [
     "OrganizeError",
+    "_spanned_clip_groups",
     "build_destination_path",
     "codec_family",
     "organize_path",
     "resolution_bucket",
-    "_spanned_clip_groups",
 ]

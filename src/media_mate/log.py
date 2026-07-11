@@ -31,7 +31,7 @@ from media_mate.models import (
     VerificationSnapshotRecord,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -194,13 +194,28 @@ class LogStore:
             conn.close()
 
     def initialize(self) -> None:
-        """Create the database file and schema if they don't exist."""
+        """Create the database file and migrate it to the current schema."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._migrate(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
+            )
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Apply additive migrations that CREATE TABLE cannot handle.
+
+        Version 4 introduced organize_ops.operation. Existing databases need a
+        default because historical rows predate the hardlink-aware operation
+        distinction and represent ordinary copies.
+        """
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(organize_ops)")}
+        if "operation" not in columns:
+            conn.execute(
+                "ALTER TABLE organize_ops ADD COLUMN operation TEXT NOT NULL DEFAULT 'copy'"
             )
 
     # ------------------------------------------------------------------

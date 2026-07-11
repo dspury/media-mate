@@ -329,7 +329,7 @@ class TestVerifyFolder:
         assert "existing snapshot" in exc_info.value.args[0]
 
     def test_snapshot_replaces_old_state(self, tmp_path: Path, store_dir: Path) -> None:
-        """After a run, the snapshot should reflect CURRENT state, not old."""
+        """A mismatch keeps the known-good snapshot until explicitly accepted."""
         folder = tmp_path / "data"
         folder.mkdir()
         (folder / "a").write_bytes(b"v1")
@@ -339,13 +339,14 @@ class TestVerifyFolder:
 
         # Modify a
         (folder / "a").write_bytes(b"v2")
-        verify_folder(folder, store)
+        changed = verify_folder(folder, store)
+        assert changed.exit_code == 2
 
-        # Third run: no further changes — should be clean (snapshot was updated)
+        # Third run reports the same mismatch because the baseline is immutable.
         report = verify_folder(folder, store)
 
-        assert report.exit_code == 0
-        assert report.files_modified == 0
+        assert report.exit_code == 2
+        assert report.files_modified == 1
 
     def test_empty_folder(self, tmp_path: Path, store_dir: Path) -> None:
         folder = tmp_path / "empty"

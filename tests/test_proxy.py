@@ -355,12 +355,11 @@ class TestGenerateProxies:
         batch = generate_proxies(src, out, store)
 
         assert batch.results == []
-        assert len(batch.failures) == 1
-        assert "already exists" in batch.failures[0].reason
+        assert len(batch.already_existed) == 1
+        assert batch.failures == []
         status, error = _latest_run_status(store)
-        assert status == "failed"
-        assert error is not None
-        assert "already exists" in error
+        assert status == "success"
+        assert error is None
 
     def test_partial_failure(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"
@@ -380,6 +379,7 @@ class TestGenerateProxies:
 
         with (
             patch("media_mate.proxy.subprocess.run", side_effect=fake_run),
+            patch("media_mate.probe.probe_file", return_value=None),
             patch("media_mate.proxy._probe_output_metadata") as mock_probe,
         ):
             mock_probe.return_value = (1920, 1080, 60.0)
@@ -430,16 +430,16 @@ class TestGenerateProxies:
                 "media_mate.proxy.subprocess.run",
                 side_effect=capturing_ffmpeg,
             ),
+            patch("media_mate.probe.probe_file", return_value=None),
             patch("media_mate.proxy._probe_output_metadata") as mock_probe,
         ):
             mock_probe.return_value = (1280, 720, 60.0)
             generate_proxies(src, out, store, config=cfg)
             args = captured_args[0]
-            # Args: [ffmpeg, -y, -i, src, -vf, vf_str, -c:v, codec, -profile:v, profile, -c:a, audio, out]
+            # Args: [ffmpeg, -y, -i, src, -vf, vf_str, -c:v, codec, -profile:v, profile, -map, 0:a, -c:a, audio, -fps_mode, cfr, out]
             # ProRes422HQ is profile 3, height 720
             assert args[5] == "scale=-2:720"
             assert args[9] == "3"  # ProRes422HQ profile
-
 
     def test_non_video_files_skipped(self, tmp_path: Path, store_dir: Path) -> None:
         """Subtitles, sidecar DBs, and checksum files are excluded, not failed."""
@@ -489,9 +489,7 @@ class TestGenerateProxies:
         assert (out / "DJI_0001.mov").exists()
         assert not (out / "DJI_0001.MP4").exists()
 
-    def test_empty_output_is_failure_and_cleaned(
-        self, tmp_path: Path, store_dir: Path
-    ) -> None:
+    def test_empty_output_is_failure_and_cleaned(self, tmp_path: Path, store_dir: Path) -> None:
         """ffmpeg exiting 0 without writing output must not count as success."""
         src = tmp_path / "in"
         src.mkdir()
@@ -514,8 +512,6 @@ class TestGenerateProxies:
         # The dead 0-byte file was cleaned up so a re-run can retry
         assert not (out / "clip.mov").exists()
         assert _latest_run_status(store)[0] == "failed"
-
-
 
     def test_run_logs_proxy_path(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"

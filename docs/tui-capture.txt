@@ -1,0 +1,23 @@
+┌─ MEDIA MATE ─────────────────────── POST WORKSTATION / v0.2.1 ──────────────┐
+│                                                                            │
+│   MEDIA BROWSER                    PIPELINE QUEUE                           │
+│   /Volumes/RAID/SHOOT_07            #  Folder                    State       │
+│   ▼ SHOOT_07                        1  /Volumes/RAID/SHOOT_07    RUNNING     │
+│     ├─ A_CAM                        2  /Volumes/SSD/PICKUPS      QUEUED      │
+│     ├─ B_CAM                                                                │
+│     └─ AUDIO                       [✓] Probe [✓] Organize [✓] Proxy         │
+│                                    [ ] Resolve [✓] Verify                   │
+│   [ ADD FOLDER  A ]                ███████████████░░░░░  7 / 10            │
+│                                    ACTIVE • elapsed 03:42                   │
+│                                    ✓ probe      184 file(s)                 │
+│                                    ✓ organize   181 ok, 3 skipped           │
+│                                    → PROXY      SHOOT_07                     │
+│                                    ✓ proxy      176 ok, 5 skipped, 0 failed │
+│                                    → VERIFY     SHOOT_07                     │
+│                                                                            │
+│                                    [ RUN QUEUE ] [ REMOVE ] [ BACK ]        │
+├────────────────────────────────────────────────────────────────────────────┤
+│ A Add folder   Ctrl+R Run queue   Ctrl+C Cancel   Esc Back   Q Quit         │
+└────────────────────────────────────────────────────────────────────────────┘
+
+Representative ASCII capture; paths and counts are synthetic.

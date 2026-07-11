@@ -62,7 +62,7 @@ media-mate is built for the operator who runs a small-to-medium video team, does
 | `verify` | Compute checksums for every file in a folder; on subsequent runs, report what changed (added / modified / missing) with structured exit codes. |
 | `log` | Query the audit log: recent runs, with text or JSON output. |
 | `run` | Pipeline orchestration: probe (always) + optional organize/proxy/resolve-project/verify. |
-| `tui` | Full-screen interactive TUI — alternative to subcommands; animated progress, live log, log browser. |
+| `tui` | Compatibility alias for the full-screen workstation (also the no-argument default). |
 
 Every command writes to the audit log so you can trace any operation back to what the filesystem looked like at the time.
 
@@ -226,20 +226,25 @@ Step order is fixed: probe (always) → organize → proxy → resolve-project �
 
 ### `tui` (interactive TUI)
 
-For ad-hoc use, launch the full-screen Textual TUI instead of typing subcommands:
+Launch the full-screen Textual workstation by running media-mate without a subcommand:
 
 ```bash
-media-mate tui
+media-mate
 ```
+
+Use `media-mate --no-tui` to remain in CLI mode and print command help.
+`media-mate tui` remains available as a compatibility alias.
 
 The TUI has four screens:
 
 - **Home** — system status: ffmpeg version, db location, run counts
-- **Pipeline** — enter a folder path, toggle which steps to run, watch animated progress with a live log
-- **Log** — browse the audit log in a sortable table, color-coded by status
-- **Settings** — view current config: proxy codec/height, checksum algo, Resolve path
+- **Pipelines** — browse mounted folders, queue several sources, run all five capability steps, and monitor colored results
+- **Audit Log** — browse and search run history, color-coded by status
+- **Settings** — edit and persist proxy codec/height, checksum algo, ffmpeg path, and Resolve path
 
-All four screens are also reachable via keyboard shortcut or mouse from the home menu.
+All screens are keyboard accessible. Press `R`, `L`, or `S` from Home; use
+`A`/`Delete` to edit the queue, `Ctrl+R` to run, `Ctrl+C` to request safe
+cancellation, `/` to search logs, and `Ctrl+S` to save settings.
 
 ---
 

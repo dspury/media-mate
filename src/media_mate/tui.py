@@ -1,577 +1,708 @@
-"""Textual TUI for media-mate.
-
-Screens
--------
-HomeScreen      — ASCII art logo, nav buttons, system stats
-PipelineScreen  — Path input + step toggles + animated run
-LogScreen       — Recent audit-log runs in a DataTable
-SettingsScreen  — Current config values
-
-Each capability module (probe, organize, proxy, verify) is called directly
-from the worker thread so the TUI stays responsive.
-"""
+"""Keyboard-first Textual interface for media-mate."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import subprocess
+from dataclasses import dataclass
+from os import replace
 from pathlib import Path
-from typing import Any, ClassVar
+from time import monotonic
+from typing import Any, ClassVar, Literal, cast
 
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.reactive import reactive
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.theme import Theme
 from textual.widgets import (
     Button,
     Checkbox,
     DataTable,
+    DirectoryTree,
+    Footer,
+    Header,
     Input,
     Label,
     Log,
     ProgressBar,
+    Select,
     Static,
 )
 
 from media_mate import __version__
 from media_mate.config import load_config
 from media_mate.log import LogStore
+from media_mate.models import ChecksumAlgo, MediaMateConfig, OrganizeConfig
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-MEDIA_MATE_DIR = Path.home() / ".media-mate"
-DEFAULT_DB = MEDIA_MATE_DIR / "media-mate.db"
-
-# ---------------------------------------------------------------------------
-# Theme
-# ---------------------------------------------------------------------------
+DEFAULT_DB = Path.home() / ".media-mate" / "media-mate.db"
 
 MM_THEME = Theme(
-    name="media-mate-dark",
-    primary="cyan",
-    secondary="#DAA520",
-    accent="#9B59B6",
-    success="#27AE60",
-    warning="#F39C12",
-    error="#E74C3C",
-    surface="#1a1a2e",
-    panel="#16213e",
-    background="#0f0f1a",
+    name="media-mate-studio",
+    primary="#ff7a45",
+    secondary="#a970ff",
+    accent="#35c5f0",
+    success="#52d273",
+    warning="#ffc857",
+    error="#ff5c5c",
+    surface="#171922",
+    panel="#20232f",
+    background="#0d0f14",
     dark=True,
 )
 
-# ---------------------------------------------------------------------------
-# ASCII logo
-# ---------------------------------------------------------------------------
-
 ASCII_LOGO = r"""
-  ╔════════════════════════════════════════════╗
-  ║     _ __ ___   __ _ _ __   ___  _ __     ║
-  ║    | '_ ` _ \ / _` | '_ \ / _ \| '_ \    ║
-  ║    | | | | | | (_| | |_) | (_) | | | |   ║
-  ║    |_| |_| |_|\__,_| .__/ \___/|_| |_|   ║
-  ║                     |_|                   ║
-  ║  zero-cost post-production media ops     ║
-  ╚════════════════════════════════════════════╝
+ __  __ _____ ____ ___    _      __  __    _  _____ _____
+|  \/  | ____|  _ \_ _|  / \    |  \/  |  / \|_   _| ____|
+| |\/| |  _| | | | | |  / _ \   | |\/| | / _ \ | | |  _|
+| |  | | |___| |_| | | / ___ \  | |  | |/ ___ \| | | |___
+|_|  |_|_____|____/___/_/   \_\ |_|  |_/_/   \_\_| |_____|
 """
-
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
 
 
 def get_ffmpeg_version() -> str:
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        return result.stdout.split("\n")[0].split()[2]
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        return result.stdout.splitlines()[0].split()[2]
     except Exception:
         return "not found"
 
 
 def get_run_counts(db: Path) -> tuple[int, int, int, int]:
-    """Return (total, success, failed, running)."""
     if not db.exists():
         return 0, 0, 0, 0
     with sqlite3.connect(db) as conn:
-        rows = dict(conn.execute("SELECT status, COUNT(*) FROM runs GROUP BY status").fetchall())
-    total = sum(rows.values())
-    return (
-        total,
-        rows.get("success", 0),
-        rows.get("failed", 0),
-        rows.get("running", 0),
+        rows = dict(conn.execute("SELECT status, COUNT(*) FROM runs GROUP BY status"))
+    return sum(rows.values()), rows.get("success", 0), rows.get("failed", 0), rows.get("running", 0)
+
+
+def config_target(explicit: Path | None) -> Path:
+    if explicit:
+        return explicit
+    local = Path.cwd() / "media-mate.toml"
+    return local if local.exists() else Path.home() / ".media-mate" / "config.toml"
+
+
+def save_config(config: MediaMateConfig, path: Path) -> None:
+    """Persist the existing TOML schema atomically while retaining comments."""
+
+    def q(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    values = {
+        ("", "proxy_codec"): q(config.proxy_codec),
+        ("", "proxy_height"): str(config.proxy_height),
+        ("", "checksum_algo"): q(config.checksum_algo.value),
+        ("", "resolve_path"): q(config.resolve_path) if config.resolve_path else None,
+        ("", "ffmpeg_path"): q(config.ffmpeg_path) if config.ffmpeg_path else None,
+        ("organize", "template"): q(config.organize.template),
+        ("organize", "on_conflict"): q(config.organize.on_conflict),
+        ("organize", "mode"): q(config.organize.mode),
+    }
+    content = (
+        _merge_config_text(path.read_text(encoding="utf-8"), values)
+        if path.exists()
+        else _default_config_text(values)
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    replace(temporary, path)
 
 
-# ---------------------------------------------------------------------------
-# HomeScreen
-# ---------------------------------------------------------------------------
+def _default_config_text(values: dict[tuple[str, str], str | None]) -> str:
+    lines = [
+        f"proxy_codec = {values[('', 'proxy_codec')]}",
+        f"proxy_height = {values[('', 'proxy_height')]}",
+        f"checksum_algo = {values[('', 'checksum_algo')]}",
+        f"resolve_path = {values[('', 'resolve_path')]}" if values[("", "resolve_path")] else "",
+        f"ffmpeg_path = {values[('', 'ffmpeg_path')]}" if values[("", "ffmpeg_path")] else "",
+        "",
+        "[organize]",
+        f"template = {values[('organize', 'template')]}",
+        f"on_conflict = {values[('organize', 'on_conflict')]}",
+        f"mode = {values[('organize', 'mode')]}",
+        "",
+    ]
+    return "\n".join(line for line in lines if line != "") + "\n"
+
+
+def _merge_config_text(existing: str, values: dict[tuple[str, str], str | None]) -> str:
+    """Update known TOML values without discarding comments or unrelated layout."""
+    if not existing.strip():
+        return _default_config_text(values)
+
+    section = ""
+    seen: set[tuple[str, str]] = set()
+    lines: list[str] = []
+    section_re = re.compile(r"^\s*\[([^]]+)]\s*(?:#.*)?$")
+    assignment_re = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*?)(\s+#.*)?$")
+    for line in existing.splitlines():
+        section_match = section_re.match(line)
+        if section_match:
+            section = section_match.group(1)
+            lines.append(line)
+            continue
+        assignment_match = assignment_re.match(line)
+        if assignment_match:
+            indent, key, equals, _old_value, inline_comment = assignment_match.groups()
+            target = (section, key)
+            if target in values:
+                seen.add(target)
+                value = values[target]
+                if value is not None:
+                    lines.append(f"{indent}{key}{equals}{value}{inline_comment or ''}")
+                continue
+        lines.append(line)
+
+    missing_top = [
+        f"{key} = {value}"
+        for (section_name, key), value in values.items()
+        if section_name == "" and value is not None and (section_name, key) not in seen
+    ]
+    first_section = next((i for i, line in enumerate(lines) if section_re.match(line)), len(lines))
+    lines[first_section:first_section] = missing_top
+
+    missing_organize = [
+        f"{key} = {value}"
+        for (section_name, key), value in values.items()
+        if section_name == "organize" and value is not None and (section_name, key) not in seen
+    ]
+    if missing_organize:
+        organize_start = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if section_re.match(line) and line.strip().startswith("[organize]")
+            ),
+            None,
+        )
+        if organize_start is None:
+            if lines and lines[-1]:
+                lines.append("")
+            lines.extend(["[organize]", *missing_organize])
+        else:
+            organize_end = next(
+                (i for i in range(organize_start + 1, len(lines)) if section_re.match(lines[i])),
+                len(lines),
+            )
+            lines[organize_end:organize_end] = missing_organize
+    return "\n".join(lines).rstrip() + "\n"
+
+
+class MessageDialog(ModalScreen[None]):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with Container(id="dialog"):
+            yield Static(self.message)
+            yield Button("OK", id="ok", variant="primary")
+
+    @on(Button.Pressed, "#ok")
+    def close(self) -> None:
+        self.dismiss(None)
 
 
 class HomeScreen(Screen[Any]):
-    CSS = """
-    HomeScreen {
-        align: center middle;
-    }
-    #logo-box {
-        width: 72;
-        height: auto;
-        background: $panel;
-        border: thick solid $secondary;
-        padding: 1 3;
-        margin-bottom: 2;
-    }
-    #logo-box Static {
-        color: $secondary;
-    }
-    #menu {
-        width: 52;
-    }
-    .nav-btn {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #status-box {
-        width: 52;
-        background: $surface;
-        border: solid $primary;
-        padding: 1 2;
-    }
-    """
+    BINDINGS: ClassVar = [
+        ("r", "pipeline", "Run"),
+        ("l", "logs", "Logs"),
+        ("s", "settings", "Settings"),
+    ]
 
     def compose(self) -> ComposeResult:
-        total, success, failed, running = get_run_counts(DEFAULT_DB)
-        ffmpeg_ver = get_ffmpeg_version()
-
-        with Container(id="logo-box"):
-            yield Static(ASCII_LOGO)
-
-        with Vertical(id="menu"):
-            yield Button("▶  Run Pipeline", id="btn-pipeline", classes="nav-btn")
-            yield Button("📋  View Log", id="btn-log", classes="nav-btn")
-            yield Button("⚙   Settings", id="btn-settings", classes="nav-btn")
-            yield Button("⏻   Quit", id="btn-quit", classes="nav-btn")
-
-        with Container(id="status-box"):
-            yield Static(f"ffmpeg     {ffmpeg_ver}")
-            yield Static(f"db         {DEFAULT_DB}")
+        total, success, failed, running = get_run_counts(cast("MediaMateApp", self.app).db_path)
+        yield Header()
+        with Container(id="hero"):
+            yield Static(ASCII_LOGO, id="logo")
+            yield Static("INGEST  •  ORGANIZE  •  PROXY  •  VERIFY", id="strap")
+            with Horizontal(id="home-actions"):
+                yield Button("RUN PIPELINES  [R]", id="pipeline", variant="primary")
+                yield Button("AUDIT LOG  [L]", id="logs")
+                yield Button("SETTINGS  [S]", id="settings")
             yield Static(
-                f"runs       {total} total  |  "
-                f"[green]{success} ✓[/green]  |  "
-                f"[red]{failed} ✗[/red]  |  "
-                f"[cyan]{running} ⚡[/cyan]"
+                f"FFMPEG {get_ffmpeg_version()}   RUNS {total}   [green]OK {success}[/]   [red]FAIL {failed}[/]   [cyan]LIVE {running}[/]",
+                id="system",
             )
+        yield Footer()
 
-    @on(Button.Pressed, "#btn-pipeline")
-    def on_pipeline(self) -> None:
+    def action_pipeline(self) -> None:
         self.app.push_screen("pipeline")
 
-    @on(Button.Pressed, "#btn-log")
-    def on_log(self) -> None:
-        self.app.push_screen("log")
+    def action_logs(self) -> None:
+        self.app.push_screen("logs")
 
-    @on(Button.Pressed, "#btn-settings")
-    def on_settings(self) -> None:
+    def action_settings(self) -> None:
         self.app.push_screen("settings")
 
-    @on(Button.Pressed, "#btn-quit")
-    def on_quit(self) -> None:
-        self.app.exit()
+    @on(Button.Pressed)
+    def buttons(self, event: Button.Pressed) -> None:
+        {
+            "pipeline": self.action_pipeline,
+            "logs": self.action_logs,
+            "settings": self.action_settings,
+        }.get(event.button.id or "", lambda: None)()
 
 
-# ---------------------------------------------------------------------------
-# PipelineScreen
-# ---------------------------------------------------------------------------
+@dataclass
+class QueueItem:
+    path: Path
+    status: str = "queued"
+
+
+@dataclass(frozen=True)
+class PipelineOptions:
+    output_root: Path | None
+    move: bool
+    dry_run: bool
+    accept_changes: bool
+    project_name: str
+    resolution: str
+    frame_rate: str
+    color_space: str
 
 
 class PipelineScreen(Screen[Any]):
-    path_value = reactive("")
-    running = reactive(False)
+    BINDINGS: ClassVar = [
+        Binding("a", "add", "Add folder"),
+        Binding("ctrl+r", "run", "Run queue"),
+        Binding("ctrl+c", "cancel", "Cancel"),
+        Binding("delete", "remove", "Remove"),
+    ]
 
-    CSS = """
-    PipelineScreen {
-        align: center middle;
-    }
-    #panel {
-        width: 74;
-        height: auto;
-        background: $panel;
-        border: solid $primary;
-        padding: 2 3;
-    }
-    .step-row {
-        margin-bottom: 0;
-    }
-    #progress-wrap {
-        height: 5;
-        margin-top: 1;
-        border: solid $surface;
-        padding: 0 1;
-    }
-    #btn-row {
-        height: 3;
-        align: center bottom;
-        margin-top: 1;
-    }
-    """
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: list[QueueItem] = []
+        self.cancel_requested = False
+        self.started = 0.0
 
     def compose(self) -> ComposeResult:
-        with Container(id="panel"):
-            yield Static("[bold cyan]▶  Run Pipeline[/bold cyan]")
-            yield Input(
-                placeholder="Enter path to media folder…",
-                id="path-input",
-            )
-            yield Label("[b]Steps:[/b]")
-            yield Vertical(
-                Checkbox("Probe — extract metadata", True, id="chk-probe"),
-                Checkbox("Organize — sort by codec / resolution", id="chk-organize"),
-                Checkbox("Proxy — generate ProRes edit proxies", id="chk-proxy"),
-                Checkbox("Verify — checksum audit", id="chk-verify"),
-                id="step-col",
-            )
-            yield Label("[b]Progress:[/b]")
-            with Container(id="progress-wrap"):
-                yield ProgressBar(id="progress", show_eta=True)
-                yield Log(id="log-area", max_lines=50, auto_scroll=True)
-            with Horizontal(id="btn-row"):
-                yield Button("← Back", id="btn-back", variant="default")
-                yield Button("▶  Run", id="btn-run", variant="primary")
+        yield Header()
+        with Horizontal(id="workspace"):
+            with Vertical(id="browser-pane"):
+                yield Label("MEDIA BROWSER", classes="section-title")
+                yield Input(value=str(Path.home()), placeholder="Path", id="browser-path")
+                yield DirectoryTree(Path.home(), id="tree")
+                yield Button("ADD FOLDER  [A]", id="add", variant="primary")
+            with Vertical(id="run-pane"):
+                yield Label("PIPELINE QUEUE", classes="section-title")
+                yield DataTable(id="queue")
+                with Horizontal(id="steps"):
+                    yield Checkbox("Probe", True, id="probe")
+                    yield Checkbox("Organize", id="organize")
+                    yield Checkbox("Proxy", id="proxy")
+                    yield Checkbox("Resolve", id="resolve")
+                    yield Checkbox("Verify", id="verify")
+                yield Input(placeholder="Output root (default: <source>-output)", id="output-root")
+                with Horizontal(id="pipeline-options"):
+                    yield Checkbox("Move originals", id="move")
+                    yield Checkbox("Dry-run organize", id="dry-run")
+                    yield Checkbox("Accept verify changes", id="accept-changes")
+                with Horizontal(id="resolve-options"):
+                    yield Input(placeholder="Resolve project name", id="project-name")
+                    yield Select(
+                        [("720p", "720"), ("1080p", "1080"), ("4K", "4K")],
+                        value="1080",
+                        id="resolution",
+                    )
+                    yield Select(
+                        [
+                            (value, value)
+                            for value in ("23.976", "24", "25", "29.97", "30", "50", "59.94", "60")
+                        ],
+                        value="24",
+                        id="frame-rate",
+                    )
+                    yield Input(value="Rec.709", placeholder="Color space", id="color-space")
+                yield ProgressBar(id="progress", show_eta=False)
+                yield Static("IDLE  •  select a folder and press A", id="stats")
+                yield Log(id="activity", max_lines=1000, auto_scroll=True, highlight=True)
+                with Horizontal():
+                    yield Button("RUN QUEUE  [Ctrl+R]", id="run", variant="primary")
+                    yield Button("REMOVE  [Del]", id="remove")
+                    yield Button("BACK  [Esc]", id="back")
+        yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#path-input").focus()
+        table = self.query_one("#queue", DataTable)
+        table.cursor_type = "row"
+        table.add_columns("#", "Folder", "State")
 
-    @on(Input.Changed, "#path-input")
-    def on_path_changed(self, event: Input.Changed) -> None:
-        self.path_value = event.value
+    @on(Input.Submitted, "#browser-path")
+    def browse_path(self, event: Input.Submitted) -> None:
+        path = Path(event.value).expanduser()
+        if path.is_dir():
+            self.query_one("#tree", DirectoryTree).path = path
+        else:
+            self.app.push_screen(MessageDialog(f"[red]Folder not found:[/]\n{path}"))
 
-    @on(Button.Pressed, "#btn-back")
-    def on_back(self) -> None:
-        self.app.pop_screen()
+    @on(DirectoryTree.DirectorySelected)
+    def selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        self.query_one("#browser-path", Input).value = str(event.path)
 
-    @on(Button.Pressed, "#btn-run")
-    def on_run(self) -> None:
-        if self.running:
+    def action_add(self) -> None:
+        path = Path(self.query_one("#browser-path", Input).value).expanduser().resolve()
+        if not path.is_dir():
+            self.app.push_screen(MessageDialog(f"[red]Not a directory:[/]\n{path}"))
             return
-        path_str = self.path_value.strip()
-        if not path_str:
-            self.app.push_screen(_error_dialog("Enter a folder path first."))
+        if any(item.path == path for item in self.items):
             return
-        path = Path(path_str)
-        if not path.exists():
-            self.app.push_screen(_error_dialog(f"Path not found:\n{path_str}"))
-            return
-        self._execute(path)
+        self.items.append(QueueItem(path))
+        self._draw_queue()
 
-    def _execute(self, path: Path) -> None:
-        self.running = True
-        btn = self.query_one("#btn-run", Button)
-        btn.disabled = True
-        progress = self.query_one("#progress", ProgressBar)
-        log_area = self.query_one("#log-area", Log)
+    def action_remove(self) -> None:
+        table = self.query_one("#queue", DataTable)
+        if self.items and table.cursor_row is not None:
+            self.items.pop(table.cursor_row)
+            self._draw_queue()
 
-        steps: list[tuple[str, str]] = [
-            ("probe", "Probe — extract metadata"),
-            ("organize", "Organize — sort media"),
-            ("proxy", "Proxy — generate proxies"),
-            ("verify", "Verify — checksum audit"),
-        ]
-        enabled = [
-            (name, label)
-            for name, label in steps
-            if (
-                (name == "probe" and self.query_one("#chk-probe", Checkbox).value)
-                or (name == "organize" and self.query_one("#chk-organize", Checkbox).value)
-                or (name == "proxy" and self.query_one("#chk-proxy", Checkbox).value)
-                or (name == "verify" and self.query_one("#chk-verify", Checkbox).value)
+    def _draw_queue(self) -> None:
+        table = self.query_one("#queue", DataTable)
+        table.clear()
+        colors = {
+            "queued": "yellow",
+            "running": "cyan",
+            "done": "green",
+            "failed": "red",
+            "cancelled": "magenta",
+        }
+        for i, item in enumerate(self.items, 1):
+            table.add_row(
+                str(i), str(item.path), f"[{colors[item.status]}]{item.status.upper()}[/]"
             )
+
+    @on(Button.Pressed)
+    def button(self, event: Button.Pressed) -> None:
+        if event.button.id == "add":
+            self.action_add()
+        elif event.button.id == "run":
+            self.action_run()
+        elif event.button.id == "remove":
+            self.action_remove()
+        elif event.button.id == "back":
+            self.app.pop_screen()
+
+    def action_run(self) -> None:
+        if not self.items or any(i.status == "running" for i in self.items):
+            return
+        self.cancel_requested = False
+        self.started = monotonic()
+        enabled = [
+            s
+            for s in ("probe", "organize", "proxy", "resolve", "verify")
+            if self.query_one(f"#{s}", Checkbox).value
         ]
-        total = len(enabled) or 1
+        if not enabled:
+            self.app.push_screen(MessageDialog("Select at least one pipeline step."))
+            return
+        output_root = self.query_one("#output-root", Input).value.strip()
+        options = PipelineOptions(
+            output_root=Path(output_root).expanduser() if output_root else None,
+            move=self.query_one("#move", Checkbox).value,
+            dry_run=self.query_one("#dry-run", Checkbox).value,
+            accept_changes=self.query_one("#accept-changes", Checkbox).value,
+            project_name=self.query_one("#project-name", Input).value.strip(),
+            resolution=str(self.query_one("#resolution", Select).value),
+            frame_rate=str(self.query_one("#frame-rate", Select).value),
+            color_space=self.query_one("#color-space", Input).value.strip() or "Rec.709",
+        )
+        self.app.run_worker(lambda: self._run_queue(enabled, options), thread=True, exclusive=True)
 
-        progress.update(total=total, progress=0)
-        log_area.write(f"[cyan]▶ Starting pipeline on[/cyan]  {path}")
+    def action_cancel(self) -> None:
+        self.cancel_requested = True
+        self.query_one("#activity", Log).write(
+            "[yellow]CANCEL REQUESTED — current capability call will finish safely[/]"
+        )
 
-        # Import here so the TUI can start even if these fail to import
+    def _ui(self, message: str, completed: int, total: int) -> None:
+        self.query_one("#activity", Log).write(message)
+        self.query_one("#progress", ProgressBar).update(total=max(total, 1), progress=completed)
+        self.query_one("#stats", Static).update(
+            f"ACTIVE  •  {completed}/{total} steps  •  elapsed {monotonic() - self.started:0.1f}s"
+        )
+        self._draw_queue()
+
+    def _run_queue(self, enabled: list[str], options: PipelineOptions) -> None:
+        from media_mate.models import ResolveProjectSpec
         from media_mate.organize import organize_path
         from media_mate.probe import probe_path
         from media_mate.proxy import generate_proxies
+        from media_mate.resolve import create_resolve_project
         from media_mate.verify import verify_folder
 
-        def _run() -> None:
-            store = LogStore(DEFAULT_DB)
-            store.initialize()
-            cfg = load_config(None)
-            overall_ok = True
-
-            for i, (step, label) in enumerate(enabled):
-                log_area.write(f"[cyan]→[/cyan] {label} …")
-                try:
+        app = cast("MediaMateApp", self.app)
+        store = LogStore(app.db_path)
+        store.initialize()
+        cfg = load_config(app.config_path)
+        total = len(self.items) * len(enabled)
+        completed = 0
+        for item in self.items:
+            if self.cancel_requested:
+                item.status = "cancelled"
+                continue
+            item.status = "running"
+            self.app.call_from_thread(self._ui, f"[cyan]▶ {item.path}[/]", completed, total)
+            out = options.output_root or item.path.parent / f"{item.path.name}-output"
+            organized: Path | None = None
+            proxy_dir: Path | None = None
+            try:
+                for step in enabled:
+                    if self.cancel_requested:
+                        item.status = "cancelled"
+                        break
+                    self.app.call_from_thread(
+                        self._ui, f"[purple]→ {step.upper()}[/] {item.path.name}", completed, total
+                    )
                     if step == "probe":
-                        results = probe_path(path, store)
-                        log_area.write(f"  [green]✓[/green]  probed {len(results)} file(s)")
-
+                        probe_result = probe_path(item.path, store, config=cfg)
+                        detail = f"{len(probe_result)} file(s)"
                     elif step == "organize":
-                        root = path.parent / f"{path.name}-output" / "organized"
-                        result = organize_path(path, root, store, config=cfg)
-                        copied = result.files_moved
-                        skipped = result.files_skipped
-                        verb = "moved" if cfg.organize.mode == "move" else "copied"
-                        log_area.write(
-                            f"  [green]✓[/green]  {verb} [b]{copied}[/b] file(s)"
-                            + (f", skipped {skipped}" if skipped else "")
+                        organized = out / "organized"
+                        organize_result = organize_path(
+                            item.path,
+                            organized,
+                            store,
+                            config=cfg,
+                            dry_run=options.dry_run,
+                            move=True if options.move else None,
                         )
-
+                        detail = f"{organize_result.files_moved} ok, {organize_result.files_skipped} skipped"
                     elif step == "proxy":
-                        proxy_dir = path.parent / f"{path.name}-output" / "proxies"
-                        pbatch = generate_proxies(path, proxy_dir, store, config=cfg)
-                        log_area.write(
-                            f"  [green]✓[/green]  generated "
-                            f"[b]{len(pbatch.results)}[/b] proxy file(s)"
-                            + (
-                                f", [red]{len(pbatch.failures)} failed[/red]"
-                                if pbatch.failures
-                                else ""
-                            )
+                        proxy_dir = out / "proxies"
+                        proxy_result = generate_proxies(
+                            organized or item.path, proxy_dir, store, config=cfg
                         )
-
-                    elif step == "verify":
-                        report = verify_folder(path, store)
-                        if report.is_clean:
-                            log_area.write(
-                                f"  [green]✓[/green]  [b]{report.files_checked}[/b] file(s) clean"
-                            )
-                        else:
-                            diffs = []
-                            if report.files_missing:
-                                diffs.append(f"missing={report.files_missing}")
-                            if report.files_modified:
-                                diffs.append(f"modified={report.files_modified}")
-                            log_area.write(f"  [yellow]![/yellow]  {', '.join(diffs)}")
-                            overall_ok = False
-
-                except Exception as exc:
-                    log_area.write(f"  [red]✗[/red]  {step}: {exc}")
-                    overall_ok = False
-
-                # Update progress from background thread via call_from_thread
-                self.app.call_from_thread(progress.update, progress=i + 1)
-
-            log_area.write("")
-            if overall_ok:
-                log_area.write("[bold green]✓ Pipeline complete.[/bold green]")
-            else:
-                log_area.write("[bold yellow]⚠ Finished with errors.[/bold yellow]")
-
-            self.app.call_from_thread(self._set_running_false)
-
-        self.app.run_worker(_run, exclusive=True)
-
-    def _set_running_false(self) -> None:
-        self.running = False
-        self.query_one("#btn-run", Button).disabled = False
-
-
-# ---------------------------------------------------------------------------
-# LogScreen
-# ---------------------------------------------------------------------------
+                        detail = f"{len(proxy_result.results)} ok, {len(proxy_result.already_existed) + len(proxy_result.skipped)} skipped, {len(proxy_result.failures)} failed"
+                    elif step == "resolve":
+                        out.mkdir(parents=True, exist_ok=True)
+                        source = organized or item.path
+                        spec = ResolveProjectSpec(
+                            name=options.project_name or item.path.name,
+                            source_folder=str(source),
+                            output_path=str(out / f"{options.project_name or item.path.name}.drp"),
+                            resolution=cast(Any, options.resolution),
+                            frame_rate=cast(Any, options.frame_rate),
+                            color_space=options.color_space,
+                        )
+                        resolve_result = create_resolve_project(
+                            spec, source, proxy_dir, store, config=cfg
+                        )
+                        detail = f"{resolve_result.bin_count} bins"
+                    else:
+                        verify_result = verify_folder(
+                            organized or item.path,
+                            store,
+                            config=cfg,
+                            accept_changes=options.accept_changes,
+                        )
+                        detail = f"{verify_result.files_checked} checked" + (
+                            "" if verify_result.is_clean else " — differences"
+                        )
+                    completed += 1
+                    self.app.call_from_thread(
+                        self._ui, f"[green]✓ {step}[/]  {detail}", completed, total
+                    )
+                if item.status != "cancelled":
+                    item.status = "done"
+            except Exception as exc:
+                item.status = "failed"
+                completed += 1
+                self.app.call_from_thread(
+                    self._ui, f"[red]✗ {type(exc).__name__}: {exc}[/]", completed, total
+                )
+        self.app.call_from_thread(
+            self._ui,
+            "[bold green]QUEUE COMPLETE[/]"
+            if not self.cancel_requested
+            else "[bold yellow]QUEUE STOPPED[/]",
+            completed,
+            total,
+        )
 
 
 class LogScreen(Screen[Any]):
-    CSS = """
-    LogScreen {
-        align: center middle;
-    }
-    #panel {
-        width: 90;
-        height: 90%;
-        background: $panel;
-        border: solid $primary;
-        padding: 1 2;
-    }
-    """
+    BINDINGS: ClassVar = [Binding("/", "search", "Search"), Binding("r", "refresh", "Refresh")]
 
     def compose(self) -> ComposeResult:
-        with Container(id="panel"):
-            yield Static("[bold cyan]📋  Audit Log[/bold cyan]")
-            with Horizontal():
-                yield Button("← Back", id="btn-back")
-                yield Button("🔄 Refresh", id="btn-refresh")
+        yield Header()
+        with Container(id="log-panel"):
+            yield Label("AUDIT LOG", classes="section-title")
+            yield Input(placeholder="Search command or status…", id="search")
             yield DataTable(id="log-table")
+        yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#log-table", DataTable)
-        table.add_column("ID", width=5, key="id")
-        table.add_column("Started", width=28, key="started")
-        table.add_column("Status", width=10, key="status")
-        table.add_column("Command", width=None, key="command")
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.add_columns("ID", "Started", "Status", "Command")
+        self._refresh()
+
+    def action_search(self) -> None:
+        self.query_one("#search", Input).focus()
+
+    def action_refresh(self) -> None:
+        self._refresh()
+
+    @on(Input.Changed, "#search")
+    def filter(self) -> None:
         self._refresh()
 
     def _refresh(self) -> None:
         table = self.query_one("#log-table", DataTable)
         table.clear()
-
-        if not DEFAULT_DB.exists():
+        needle = self.query_one("#search", Input).value.lower()
+        app = cast("MediaMateApp", self.app)
+        if not app.db_path.exists():
             return
-
-        with sqlite3.connect(DEFAULT_DB) as conn:
-            conn.row_factory = sqlite3.Row
+        with sqlite3.connect(app.db_path) as conn:
             rows = conn.execute(
-                "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 200"
+                "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 500"
             ).fetchall()
-
-        for row in rows:
-            row_key = table.add_row(
-                str(row["id"]),
-                row["started_at"][:28],
-                row["status"],
-                row["command"],
+        colors = {"success": "green", "failed": "red", "running": "cyan", "partial": "yellow"}
+        for rid, started, status, command in rows:
+            if needle and needle not in f"{status} {command}".lower():
+                continue
+            table.add_row(
+                str(rid), started[:19], f"[{colors.get(status, 'yellow')}]{status}[/]", command
             )
-            # Color-code the status column by painting the row
-            status = row["status"]
-            if status == "success":
-                table.update_cell(row_key, "status", "[green]success[/green]")
-            elif status == "failed":
-                table.update_cell(row_key, "status", "[red]failed[/red]")
-            elif status == "running":
-                table.update_cell(row_key, "status", "[cyan]running[/cyan]")
-            else:
-                table.update_cell(row_key, "status", f"[yellow]{status}[/yellow]")
-
-    @on(Button.Pressed, "#btn-back")
-    def on_back(self) -> None:
-        self.app.pop_screen()
-
-    @on(Button.Pressed, "#btn-refresh")
-    def on_refresh(self) -> None:
-        self._refresh()
-
-
-# ---------------------------------------------------------------------------
-# SettingsScreen
-# ---------------------------------------------------------------------------
 
 
 class SettingsScreen(Screen[Any]):
-    CSS = """
-    SettingsScreen {
-        align: center middle;
-    }
-    #panel {
-        width: 62;
-        height: auto;
-        background: $panel;
-        border: solid $secondary;
-        padding: 2 3;
-    }
-    """
-
     def compose(self) -> ComposeResult:
-        cfg = load_config(None)
-        with Container(id="panel"):
-            yield Static("[bold gold]⚙  Settings[/bold gold]")
-            yield Label("")
-            yield Static("[b]Active configuration:[/b]")
-            yield Label("")
-            yield Horizontal(
-                Static("proxy codec", id="lbl-proxy"),
-                Static(f"[cyan]{cfg.proxy_codec}[/cyan]", id="val-proxy"),
+        app = cast("MediaMateApp", self.app)
+        cfg = load_config(app.config_path)
+        yield Header()
+        with Container(id="settings-panel"):
+            yield Label("PROJECT SETTINGS", classes="section-title")
+            yield Label("Proxy codec")
+            yield Select(
+                [(x, x) for x in ("ProRes422Proxy", "ProRes422LT", "ProRes422", "ProRes422HQ")],
+                value=cfg.proxy_codec,
+                id="codec",
             )
-            yield Horizontal(
-                Static("proxy height", id="lbl-height"),
-                Static(f"[cyan]{cfg.proxy_height}p[/cyan]", id="val-height"),
+            yield Label("Proxy height")
+            yield Select(
+                [(f"{x}p", x) for x in (540, 720, 1080, 2160)], value=cfg.proxy_height, id="height"
             )
-            yield Horizontal(
-                Static("checksum", id="lbl-cs"),
-                Static(f"[cyan]{cfg.checksum_algo.value}[/cyan]", id="val-cs"),
+            yield Label("Checksum")
+            yield Select(
+                [("xxHash (fast)", "xxhash"), ("SHA-256", "sha256")],
+                value=cfg.checksum_algo.value,
+                id="checksum",
             )
-            yield Horizontal(
-                Static("resolve path", id="lbl-res"),
-                Static(f"[cyan]{cfg.resolve_path or 'not set'}[/cyan]", id="val-res"),
-            )
-            yield Horizontal(
-                Static("ffmpeg path", id="lbl-ff"),
-                Static(f"[cyan]{cfg.ffmpeg_path or 'default'}[/cyan]", id="val-ff"),
-            )
-            yield Label("")
-            yield Button("← Back", id="btn-back")
+            yield Label("FFmpeg path (blank = PATH)")
+            yield Input(value=cfg.ffmpeg_path or "", id="ffmpeg")
+            yield Label("Resolve path (blank = auto)")
+            yield Input(value=cfg.resolve_path or "", id="resolve-path")
+            yield Label("Organize template")
+            yield Input(value=cfg.organize.template, id="organize-template")
+            with Horizontal(id="organize-options"):
+                yield Select(
+                    [
+                        ("Skip conflicts", "skip"),
+                        ("Overwrite conflicts", "overwrite"),
+                        ("Rename conflicts", "rename"),
+                    ],
+                    value=cfg.organize.on_conflict,
+                    id="on-conflict",
+                )
+                yield Select(
+                    [("Copy originals", "copy"), ("Move originals", "move")],
+                    value=cfg.organize.mode,
+                    id="organize-mode",
+                )
+            with Horizontal():
+                yield Button("SAVE  [Ctrl+S]", id="save", variant="primary")
+                yield Button("BACK", id="back")
+            yield Static(f"Writes {config_target(app.config_path)}", id="config-target")
+        yield Footer()
 
-    @on(Button.Pressed, "#btn-back")
-    def on_back(self) -> None:
-        self.app.pop_screen()
+    BINDINGS: ClassVar = [Binding("ctrl+s", "save", "Save")]
 
+    def action_save(self) -> None:
+        app = cast("MediaMateApp", self.app)
+        old = load_config(app.config_path)
+        height = self.query_one("#height", Select).value
+        assert isinstance(height, int)
+        cfg = MediaMateConfig.model_validate(
+            {
+                **old.model_dump(),
+                "proxy_codec": str(self.query_one("#codec", Select).value),
+                "proxy_height": height,
+                "checksum_algo": ChecksumAlgo(str(self.query_one("#checksum", Select).value)),
+                "ffmpeg_path": self.query_one("#ffmpeg", Input).value.strip() or None,
+                "resolve_path": self.query_one("#resolve-path", Input).value.strip() or None,
+                "organize": OrganizeConfig(
+                    template=self.query_one("#organize-template", Input).value,
+                    on_conflict=cast(
+                        Literal["skip", "overwrite", "rename"],
+                        str(self.query_one("#on-conflict", Select).value),
+                    ),
+                    mode=cast(
+                        Literal["copy", "move"],
+                        str(self.query_one("#organize-mode", Select).value),
+                    ),
+                ),
+            }
+        )
+        target = config_target(app.config_path)
+        save_config(cfg, target)
+        app.config_path = target
+        self.app.push_screen(MessageDialog(f"[green]Settings saved[/]\n{target}"))
 
-# ---------------------------------------------------------------------------
-# ErrorDialog  (factory function — simpler than a full class)
-# ---------------------------------------------------------------------------
-
-
-def _error_dialog(message: str) -> Screen[Any]:
-    class ErrorDialog(Screen[Any]):
-        CSS = """
-        ErrorDialog { align: center middle; }
-        #dialog {
-            width: 60;
-            height: auto;
-            background: $surface;
-            border: thick solid $error;
-            padding: 2 3;
-        }
-        """
-
-        def compose(self) -> ComposeResult:
-            with Container(id="dialog"):
-                yield Static(f"[red]![/red]  {message}", id="err-msg")
-                yield Button("OK", id="btn-ok")
-
-        @on(Button.Pressed, "#btn-ok")
-        def on_ok(self) -> None:
-            self.app.pop_screen()
-
-    return ErrorDialog()
-
-
-# ---------------------------------------------------------------------------
-# MediaMateApp
-# ---------------------------------------------------------------------------
+    @on(Button.Pressed)
+    def button(self, event: Button.Pressed) -> None:
+        self.action_save() if event.button.id == "save" else self.app.pop_screen()
 
 
 class MediaMateApp(App[Any]):
-    TITLE = "media-mate"
-    SUB_TITLE = f"v{__version__}"
+    TITLE = "MEDIA MATE"
+    SUB_TITLE = f"POST WORKSTATION  /  v{__version__}"
     THEMES: ClassVar = [MM_THEME]
-    BINDINGS: ClassVar = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("escape", "pop_screen", "Back", show=True),
-    ]
+    CSS = """
+    Screen { background: $background; }
+    Header { background: $surface; color: $text; }
+    Footer { background: $surface; }
+    #hero { width: 84; height: auto; align: center middle; margin: 4 0; padding: 2 4; border: tall $primary; background: $panel; align-horizontal: center; }
+    #logo { color: $primary; text-align: center; } #strap { text-align: center; color: $text-muted; margin: 1; }
+    #home-actions { height: 5; align: center middle; } #home-actions Button { margin: 0 1; } #system { text-align: center; border-top: solid $surface-lighten-2; padding-top: 1; }
+    #workspace { height: 1fr; padding: 1; } #browser-pane { width: 38%; border-right: solid $surface-lighten-2; padding: 0 1; } #run-pane { width: 62%; padding: 0 1; }
+    .section-title { color: $primary; text-style: bold; margin-bottom: 1; } #tree { height: 1fr; } #queue { height: 12; } #steps, #pipeline-options, #resolve-options { height: 3; } #progress { margin-top: 1; }
+    #stats { color: $accent; height: 2; } #activity { height: 1fr; border: solid $surface-lighten-2; background: $surface; }
+    #log-panel { margin: 1 3; } #search { width: 60; margin-bottom: 1; } #log-table { height: 1fr; }
+    #settings-panel { width: 70; height: auto; margin: 2 0; padding: 2 4; border: tall $secondary; background: $panel; align-horizontal: center; } #settings-panel Select, #settings-panel Input { margin-bottom: 1; } #organize-options Select { width: 1fr; margin-right: 1; }
+    MessageDialog { align: center middle; background: rgba(0,0,0,0.7); } #dialog { width: 60; height: auto; padding: 2 3; border: tall $error; background: $panel; }
+    """
+    BINDINGS: ClassVar = [Binding("q", "quit", "Quit"), Binding("escape", "back", "Back")]
     SCREENS: ClassVar = {
         "home": HomeScreen,
         "pipeline": PipelineScreen,
-        "log": LogScreen,
+        "logs": LogScreen,
         "settings": SettingsScreen,
     }
 
+    def __init__(self, db_path: Path = DEFAULT_DB, config_path: Path | None = None) -> None:
+        super().__init__()
+        self.db_path = db_path
+        self.config_path = config_path
+
     def on_mount(self) -> None:
+        self.register_theme(MM_THEME)
+        self.theme = MM_THEME.name
         self.push_screen("home")
 
+    async def action_back(self) -> None:
+        if len(self.screen_stack) > 1:
+            self.pop_screen()
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
-
-def main() -> None:
-    app = MediaMateApp()
-    app.run()
+def main(db_path: Path = DEFAULT_DB, config_path: Path | None = None) -> None:
+    MediaMateApp(db_path, config_path).run()
 
 
 if __name__ == "__main__":

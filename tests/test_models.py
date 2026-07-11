@@ -70,7 +70,7 @@ class TestMediaProbe:
 class TestOrganize:
     def test_default_config(self) -> None:
         cfg = OrganizeConfig()
-        assert "{codec_family}" in cfg.template
+        assert "{source_relpath}" in cfg.template
         assert cfg.on_conflict == "skip"
 
     def test_custom_template(self) -> None:
@@ -106,6 +106,7 @@ class TestOrganize:
         )
         assert r.id is None
         assert r.codec_family == "prores"
+        assert r.operation == "copy"
 
 
 class TestMediaMateConfig:

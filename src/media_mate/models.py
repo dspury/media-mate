@@ -115,7 +115,7 @@ class OrganizeOpRecord(BaseModel):
     run_id: int
     source_path: str
     destination_path: str
-    operation: Literal["copy", "move", "link"]  # link = hardlink (same-device)
+    operation: Literal["copy", "move", "link"] = "copy"  # link = hardlink (same-device)
     codec_family: str | None
     resolution_bucket: str | None
     file_size: int | None

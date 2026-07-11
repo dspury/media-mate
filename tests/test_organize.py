@@ -256,8 +256,8 @@ class TestOrganizePath:
         # Copy is the default: raw files stay in place
         assert (src / "a.mov").exists()
         assert (src / "b.mov").exists()
-        assert (out / "h264" / "1080p" / "a.mov").exists()
-        assert (out / "h264" / "1080p" / "b.mov").exists()
+        assert (out / "a.mov").exists()
+        assert (out / "b.mov").exists()
 
         # Audit log got the rows
         assert _count_rows(store, "organize_ops") == 2
@@ -275,7 +275,11 @@ class TestOrganizePath:
 
         assert result.files_moved == 1
         assert not (src / "a.mov").exists()
-        assert (out / "h264" / "1080p" / "a.mov").exists()
+        assert (out / "a.mov").exists()
+        assert _count_rows(store, "organize_ops") == 1
+        with sqlite3.connect(store.db_path) as conn:
+            operation = conn.execute("SELECT operation FROM organize_ops").fetchone()[0]
+        assert operation == "move"
 
     def test_config_mode_move(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"
@@ -291,7 +295,7 @@ class TestOrganizePath:
 
         assert result.files_moved == 1
         assert not (src / "a.mov").exists()
-        assert (out / "h264" / "1080p" / "a.mov").exists()
+        assert (out / "a.mov").exists()
 
     def test_skips_unprobed_files(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"
@@ -310,7 +314,7 @@ class TestOrganizePath:
         assert result.files_moved == 1
         assert result.files_skipped == 1
         assert any("unprobed.mov" in e and "no probe data" in e for e in result.errors)
-        assert (out / "h264" / "1080p" / "probed.mov").exists()
+        assert (out / "probed.mov").exists()
         # Unprobed file remains in source
         assert (src / "unprobed.mov").exists()
 
@@ -330,7 +334,7 @@ class TestOrganizePath:
         # File still in source
         assert (src / "a.mov").exists()
         # Destination not created
-        assert not (out / "h264" / "1080p" / "a.mov").exists()
+        assert not (out / "a.mov").exists()
         # No organize_ops rows for dry-run
         assert _count_rows(store, "organize_ops") == 0
 
@@ -341,7 +345,7 @@ class TestOrganizePath:
         store = _make_store(store_dir)
 
         # Pre-create destination
-        dest_dir = out / "h264" / "1080p"
+        dest_dir = out
         dest_dir.mkdir(parents=True)
         (dest_dir / "a.mov").write_bytes(b"existing")
 
@@ -364,7 +368,7 @@ class TestOrganizePath:
         out = tmp_path / "out"
         store = _make_store(store_dir)
 
-        dest_dir = out / "h264" / "1080p"
+        dest_dir = out
         dest_dir.mkdir(parents=True)
         (dest_dir / "a.mov").write_bytes(b"existing")
 
@@ -384,7 +388,7 @@ class TestOrganizePath:
         out = tmp_path / "out"
         store = _make_store(store_dir)
 
-        dest_dir = out / "h264" / "1080p"
+        dest_dir = out
         dest_dir.mkdir(parents=True)
         (dest_dir / "a.mov").write_bytes(b"existing")
 
@@ -412,8 +416,8 @@ class TestOrganizePath:
         result = organize_path(src, out, store)
 
         assert result.files_moved == 2
-        assert (out / "h264" / "1080p" / "video.mp4").exists()
-        assert (out / "audio" / "unknown" / "audio.mp3").exists()
+        assert (out / "video.mp4").exists()
+        assert (out / "audio.mp3").exists()
 
     def test_uses_default_template(self, tmp_path: Path, store_dir: Path) -> None:
         """Sanity check that the default OrganizeConfig template is applied."""
@@ -426,7 +430,7 @@ class TestOrganizePath:
         _seed_probe(store, str(src / "clip.mov"), codec="prores", height=1080)
 
         organize_path(src, out, store)
-        assert (out / "prores" / "1080p" / "clip.mov").exists()
+        assert (out / "clip.mov").exists()
 
     def test_custom_template(self, tmp_path: Path, store_dir: Path) -> None:
         src = tmp_path / "in"
@@ -489,5 +493,5 @@ class TestOrganizePath:
         result = organize_path(src, out, store)
 
         assert result.files_moved == 2
-        assert (out / "h264" / "1080p" / "top.mov").exists()
-        assert (out / "h264" / "1080p" / "deep.mov").exists()
+        assert (out / "top.mov").exists()
+        assert (out / "sub" / "deep.mov").exists()

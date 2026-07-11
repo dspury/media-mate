@@ -372,7 +372,57 @@ media-mate/
 
 ---
 
-## 12. Versioning rule
+## 12. First-class terminal interface
+
+`media-mate` with no arguments launches the Textual workstation. Automation and
+the existing command surface remain available as subcommands; `media-mate
+--no-tui` explicitly stays in CLI mode and prints command help. `media-mate tui`
+remains as a compatibility alias. Global `--db` and `--config` options are passed
+through to the TUI.
+
+### Screen inventory
+
+| Screen | Purpose |
+|---|---|
+| Home | Studio-style launch surface, ffmpeg health, database run totals |
+| Pipelines | Browse mounted directories, queue multiple folders, select all five capability steps, and monitor sequential execution |
+| Audit log | Browse up to 500 runs with colored status and incremental command/status search |
+| Settings | Edit proxy codec/height, checksum algorithm, ffmpeg path, and Resolve path; save the existing TOML schema |
+
+The pipeline executes `probe → organize → proxy → resolve → verify`. Each queued
+folder has an independent state (`queued`, `running`, `done`, `failed`, or
+`cancelled`). Capability modules remain the source of truth and are called
+unchanged. Cancellation therefore occurs safely between capability calls; an
+in-flight ffmpeg or checksum batch is allowed to finish rather than being killed
+mid-write. The activity panel reports elapsed time, queue/step progress, and
+color-coded per-capability result totals. Frame/fps/bitrate telemetry is deferred
+until the proxy capability exposes a progress callback.
+
+### Keyboard contract
+
+| Key | Action |
+|---|---|
+| `R`, `L`, `S` | Open Pipelines, Audit Log, or Settings from Home |
+| Arrow keys / `Tab` / `Shift+Tab` | Move through trees, tables, fields, toggles, and buttons |
+| `Enter` | Expand/select a directory or activate the focused control |
+| `A` | Add the selected browser folder to the pipeline queue |
+| `Delete` | Remove the selected queued folder |
+| `Ctrl+R` | Run the queue sequentially |
+| `Ctrl+C` | Request safe cancellation after the active capability returns |
+| `/` | Focus audit-log search |
+| `Ctrl+S` | Save settings |
+| `Escape` | Return to the previous screen |
+| `Q` | Quit |
+
+The visual system uses a near-black edit-bay background, Resolve-inspired orange
+for primary actions, purple for stage transitions, cyan for telemetry, and
+green/yellow/red outcome semantics. Terminal applications cannot select
+proportional fonts, so hierarchy is expressed with weight, spacing, borders, and
+color while metadata remains naturally monospace.
+
+---
+
+## 13. Versioning rule
 
 **media-mate ships as a beta indefinitely.** The version scheme is `MAJOR.MINOR.PATCH`:
 

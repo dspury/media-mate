@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -341,10 +342,8 @@ def generate_proxies(
 
             # Probe the source to get accurate metadata for ffmpeg flags.
             probe: MediaProbe | None = None
-            try:
+            with suppress(ProbeError):
                 probe = probe_file(f, ffprobe_path=ffprobe_path)
-            except ProbeError:
-                pass  # proceed without probe data; _ffmpeg_cmd will use safe defaults
 
             request = ProxyRequest(
                 source_path=str(f),
@@ -359,7 +358,12 @@ def generate_proxies(
             # Container is recognized but decode will fail with a cryptic error.
             raw_codecs = {"r3d", "braw", "ari"}
             if probe and probe.video_codec and probe.video_codec.lower() in raw_codecs:
-                failures.append((f, f"RAW codec '{probe.video_codec}' requires vendor SDK; stock ffmpeg cannot decode"))
+                failures.append(
+                    (
+                        f,
+                        f"RAW codec '{probe.video_codec}' requires vendor SDK; stock ffmpeg cannot decode",
+                    )
+                )
                 continue
 
             result = generate_proxy(request, ffmpeg_path=ffmpeg_path)
@@ -403,7 +407,9 @@ def generate_proxies(
         results=results,
         failures=[ProxyFailure(source_path=str(p), reason=r) for p, r in failures],
         skipped=skipped,
-        already_existed=[ProxySkip(source_path=str(s), proxy_path=str(o)) for s, o in already_existed],
+        already_existed=[
+            ProxySkip(source_path=str(s), proxy_path=str(o)) for s, o in already_existed
+        ],
     )
 
 
