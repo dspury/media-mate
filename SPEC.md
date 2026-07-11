@@ -1,8 +1,8 @@
-# media-mate — Spec v0.2.2
+# media-mate — Spec v0.2.3
 
 > **Name:** `media-mate`
 > **Repo location:** `dspury/media-mate`
-> **Version:** 0.2.2
+> **Version:** 0.2.3
 > **Status:** Released — stable
 
 ---
@@ -533,6 +533,87 @@ All items shipped in v0.1.0:
 #### Resolved issues
 
 Closed in v0.2.2: #7 (SAR), #17 (--dry-run), #19 (proxy drops TC/audio), #25 (editorial fields), #26 (bit depth), #27 (VFR), #28 (skip-existing), #29 (sidecar noise).
+
+---
+
+### v0.2.3 — Code-review remediation + TUI redesign
+
+**Status:** Released.
+
+Bundles a full external code review (verdict: NEEDS CHANGES) with a TUI
+visual-layer redesign. v0.2.2 landed most code fixes; this release
+finishes them, fixes two regressions v0.2.2 introduced, corrects invalid
+shipped config/docs, adds the regression tests the review flagged as
+missing, and gives the Textual workstation a cohesive branded look
+(see **TUI redesign** below).
+
+#### Bug fixes
+
+- **Silent-video proxy generation hardened.** `_ffmpeg_cmd()` now emits
+  ffmpeg optional-audio mapping (`-map 0:v:0 -map 0:a?`) instead of a
+  probe-conditional `-an`/`-map 0:a`. This both fixes the silent-video
+  failure (screen recordings, action cams) and the inverse bug where a
+  failed `ffprobe` stripped audio from a source that actually had it.
+- **`create_resolve_project()` crash on default config.** v0.2.2's
+  provenance wiring called `config.config_hash()` instead of
+  `cfg.config_hash()`, crashing whenever `config=None` (the default). Fixed;
+  restores the 5 resolve tests.
+- **Invalid shipped config examples.** `media-mate.toml.example` and the
+  README config block placed `proxy_codec`/`proxy_height`/`checksum_algo`
+  under `[organize]` (silently dropped) or a `[proxy]` table (hard
+  `ValidationError`, because the loader left the table for `extra="forbid"`
+  to reject). The loader now pops the `[proxy]` table cleanly; both examples
+  use valid top-level keys.
+- **TUI type errors.** Three pre-existing `Path | None → Path` mypy errors
+  in `_run_queue()` (`proxy_source`/`resolve_source`/`verify_source`) fixed
+  via `is None` narrowing.
+
+#### Improvements
+
+- **TUI output isolation** (`compute_output_tree()`): each queued source
+  gets its own subtree under a shared output root, so same-named clips from
+  separate cards no longer collide.
+- **TUI dry-run safety**: when organize is a dry-run, proxy/resolve/verify
+  are skipped instead of operating on an unpopulated output tree.
+- **Audit provenance**: all capabilities now pass `config_hash` to
+  `start_run()`, so every run is reproducible against its config.
+
+#### Docs / release hygiene
+
+- README & SPEC default organize layout corrected to
+  `{root}/{source_relpath}/{filename}{ext}` (source-structure-preserving).
+- SPEC dropped nonexistent proxy `--codec`/`--height` flags.
+- README test count corrected to 292.
+
+#### Tests
+
+Added 20 regression tests covering the review's false-confidence gaps:
+real-ffmpeg silent-video proxy generation (`@requires_ffmpeg`), organize
+immutability (distinct inode; editing the copy leaves raw untouched),
+empty-baseline verify (verify empty → add file → reports added),
+`config_hash` provenance, and TUI multi-folder output isolation +
+dry-run-not-poisoning.
+
+#### TUI redesign (no logic change)
+
+The Textual workstation got a full visual-layer overhaul — zero logic
+change, all existing widget IDs and pipeline behavior preserved (292 tests
+still pass; a verify-only smoke run completes `done`).
+
+- **Branded home dashboard.** Refined slant wordmark (replaces the
+  misaligned figlet), strap listing all five capabilities, tagline, and
+  four bordered stat tiles (TOTAL / SUCCEEDED / FAILED / LIVE) with an
+  ffmpeg + db-path line below.
+- **Titled panels throughout.** Every screen is now grouped into bordered,
+  titled panels: Pipeline → MEDIA BROWSER / QUEUE / CONFIGURE / ACTIVITY
+  with action buttons docked at the bottom; Settings → PROXY / ORGANIZE /
+  PATHS inside a scrollable panel.
+- **Logs polish.** Bordered AUDIT LOG panel with a live subtitle
+  (`N runs`, or `N shown · M total` when filtering); friendlier timestamps
+  (`YYYY-MM-DD HH:MM:SS`); status rendered as a colored dot + label.
+- **Comprehensive CSS rewrite.** Round borders, panel backgrounds,
+  design-token spacing, consistent stat-tile / field-label / button
+  styling; the orange primary anchors the brand across all screens.
 
 ---
 
