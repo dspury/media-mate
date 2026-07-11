@@ -301,9 +301,10 @@ def probe_path(
     if not files:
         return []
 
-    ffprobe_path = find_ffprobe(config)
+    cfg = config or MediaMateConfig()
+    ffprobe_path = find_ffprobe(cfg)
     command = f"media-mate probe {path}"
-    run_id = store.start_run(command)
+    run_id = store.start_run(command, config_hash=cfg.config_hash())
 
     results: list[MediaProbe] = []
     errors: list[tuple[Path, str]] = []

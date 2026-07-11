@@ -115,7 +115,7 @@ class OrganizeOpRecord(BaseModel):
     run_id: int
     source_path: str
     destination_path: str
-    operation: Literal["copy", "move", "link"] = "copy"  # link = hardlink (same-device)
+    operation: Literal["copy", "move"] = "copy"
     codec_family: str | None
     resolution_bucket: str | None
     file_size: int | None
@@ -207,7 +207,8 @@ class ResolveProjectResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    path: str
+    path: str  # .drp path if Resolve succeeded; manifest path otherwise
+    manifest_path: str | None = None  # always set when Resolve was unavailable
     resolution: str
     frame_rate: str
     color_space: str
@@ -258,6 +259,25 @@ class MediaMateConfig(BaseModel):
     checksum_algo: ChecksumAlgo = ChecksumAlgo.XXHASH
     resolve_path: str | None = None  # None = auto-detect
     ffmpeg_path: str | None = None  # None = auto-detect (PATH lookup)
+
+    def config_hash(self) -> str:
+        """Deterministic hash of all relevant config fields for audit provenance.
+
+        Used to record which config was active when a run was executed,
+        so future investigators can reproduce or explain a result.
+        Excludes resolve_path and ffmpeg_path (paths are environment-specific).
+        """
+        import hashlib
+
+        sig = (
+            f"organize_template={self.organize.template}"
+            f":organize_mode={self.organize.mode}"
+            f":organize_conflict={self.organize.on_conflict}"
+            f":proxy_codec={self.proxy_codec}"
+            f":proxy_height={self.proxy_height}"
+            f":checksum_algo={self.checksum_algo.value}"
+        )
+        return hashlib.sha256(sig.encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +346,8 @@ class ProjectRecord(BaseModel):
 
     id: int | None = None
     name: str
-    path: str
+    path: str  # .drp path if Resolve succeeded; manifest path otherwise
+    manifest_path: str | None = None  # always set when Resolve was unavailable
     run_id: int
     resolution: str | None
     frame_rate: str | None

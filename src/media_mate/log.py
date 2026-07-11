@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS organize_ops (
     run_id INTEGER REFERENCES runs(id),
     source_path TEXT NOT NULL,
     destination_path TEXT NOT NULL,
-    operation TEXT NOT NULL,          -- copy | move | link
+    operation TEXT NOT NULL,          -- copy | move
     codec_family TEXT,
     resolution_bucket TEXT,
     file_size INTEGER,
@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS verification_snapshots (
     algo TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     UNIQUE(folder, path)
+);
+
+-- Stores one row per verified folder, recording the baseline state.
+-- is_empty=True means the folder was empty at baseline time (no files).
+-- This distinguishes "folder has never had files" from "folder has files".
+CREATE TABLE IF NOT EXISTS verification_baselines (
+    folder TEXT PRIMARY KEY,
+    algo TEXT NOT NULL,
+    is_empty INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
@@ -217,6 +227,23 @@ class LogStore:
             conn.execute(
                 "ALTER TABLE organize_ops ADD COLUMN operation TEXT NOT NULL DEFAULT 'copy'"
             )
+
+        # Version 5 introduced verification_baselines.
+        # An empty folder verification should not create snapshot rows — a file
+        # added later must be reported as "added", not silently absorbed.
+        # verification_baselines.folder is the source of truth for is_empty.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS verification_baselines ("
+            "folder TEXT PRIMARY KEY, algo TEXT NOT NULL, "
+            "is_empty INTEGER NOT NULL DEFAULT 0, recorded_at TEXT NOT NULL)"
+        )
+
+        # Version 6 introduced projects.manifest_path.
+        # When Resolve is unavailable, the actual artifact is the manifest path,
+        # not the requested .drp path. Keeping both fields makes the audit honest.
+        proj_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        if "manifest_path" not in proj_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN manifest_path TEXT")
 
     # ------------------------------------------------------------------
     # Runs
@@ -373,12 +400,13 @@ class LogStore:
         """Insert a project row; return its id."""
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO projects (name, path, run_id, resolution, frame_rate, "
+                "INSERT INTO projects (name, path, manifest_path, run_id, resolution, frame_rate, "
                 "color_space, bin_count, timeline_count, resolve_version, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.name,
                     record.path,
+                    record.manifest_path,
                     record.run_id,
                     record.resolution,
                     record.frame_rate,
@@ -386,7 +414,7 @@ class LogStore:
                     record.bin_count,
                     record.timeline_count,
                     record.resolve_version,
-                    _iso(record.created_at),
+                    record.created_at,
                 ),
             )
             assert cur.lastrowid is not None
@@ -497,12 +525,12 @@ class LogStore:
     # ------------------------------------------------------------------
 
     def replace_verification_snapshot(
-        self, folder: str, entries: list[VerificationSnapshotRecord]
+        self, folder: str, entries: list[VerificationSnapshotRecord], *, is_empty: bool = False, algo: str | None = None
     ) -> None:
         """Replace the entire snapshot for a folder atomically.
 
-        Deletes existing rows for the folder, then inserts the new ones.
-        All operations happen in a single transaction.
+        Also updates the verification_baselines row so is_empty is tracked
+        correctly for future runs.
         """
         with self._connect() as conn:
             conn.execute("DELETE FROM verification_snapshots WHERE folder = ?", (folder,))
@@ -522,6 +550,24 @@ class LogStore:
                     for e in entries
                 ],
             )
+            # Update baseline record
+            baseline_algo = algo or (entries[0].algo if entries else "xxhash")
+            conn.execute(
+                "INSERT OR REPLACE INTO verification_baselines "
+                "(folder, algo, is_empty, recorded_at) VALUES (?, ?, ?, ?)",
+                (folder, baseline_algo, int(is_empty), _iso(datetime.now(UTC))),
+            )
+
+    def get_verification_baseline(self, folder: str) -> tuple[bool, str] | None:
+        """Return (is_empty, algo) for a folder's baseline, or None if no baseline exists."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT is_empty, algo FROM verification_baselines WHERE folder = ?",
+                (folder,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (bool(row["is_empty"]), row["algo"])
 
     def get_verification_snapshot(self, folder: str) -> list[VerificationSnapshotRecord]:
         """Return all snapshot rows for a folder, ordered by path."""

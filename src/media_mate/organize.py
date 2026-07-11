@@ -232,8 +232,9 @@ def organize_path(
     """
     source = Path(source)
     dest_root = Path(dest_root)
-    cfg = (config or MediaMateConfig()).organize
-    do_move = move if move is not None else cfg.mode == "move"
+    cfg = config or MediaMateConfig()
+    organize_cfg = cfg.organize
+    do_move = move if move is not None else organize_cfg.mode == "move"
     started = datetime.now(UTC)
 
     if not source.exists():
@@ -271,7 +272,7 @@ def organize_path(
     command = f"media-mate organize {source} --root {dest_root}"
     if do_move:
         command += " --move"
-    run_id = store.start_run(command)
+    run_id = store.start_run(command, config_hash=cfg.config_hash())
 
     files_moved = 0
     files_skipped = 0
@@ -291,41 +292,32 @@ def organize_path(
             family = codec_family(probe.codec)
             bucket = resolution_bucket(probe.height)
             dest = build_destination_path(
-                cfg.template, dest_root, f, family, bucket, source_root=source
+                organize_cfg.template, dest_root, f, family, bucket, source_root=source
             )
 
             # Conflict handling
             if dest.exists():
-                if cfg.on_conflict == "skip":
+                if organize_cfg.on_conflict == "skip":
                     files_skipped += 1
                     errors.append(f"{f.name}: destination already exists, skipping")
                     continue
-                if cfg.on_conflict == "rename":
+                if organize_cfg.on_conflict == "rename":
                     dest = _unique_path(dest)
                 # "overwrite" falls through; copy2/move both overwrite
 
             if not dry_run:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                op: Literal["copy", "move", "link"]
+                op: Literal["copy", "move"]
                 if do_move:
                     shutil.move(str(f), str(dest))
                     op = "move"
                 else:
-                    # Same-device: use os.link() for zero-copy.
-                    # Both paths must be on the same filesystem (stat st_dev).
-                    # Hardlinks share the same inode; originals remain immutable.
-                    same_device = f.stat().st_dev == dest.parent.stat().st_dev
-                    if same_device:
-                        try:
-                            os.link(str(f), str(dest))
-                            op = "link"
-                        except OSError:
-                            # Fallback to copy if hardlink fails (cross-fs, permissions)
-                            shutil.copy2(str(f), str(dest))
-                            op = "copy"
-                    else:
-                        shutil.copy2(str(f), str(dest))
-                        op = "copy"
+                    # Always copy. Hardlinks were considered for same-device I/O
+                    # but were rejected: os.link() makes the destination an alias
+                    # to the source inode, so editing the "copy" corrupts the raw.
+                    # We choose correctness over the marginal speed of a hardlink.
+                    shutil.copy2(str(f), str(dest))
+                    op = "copy"
 
                 store.insert_organize_op(
                     OrganizeOpRecord(

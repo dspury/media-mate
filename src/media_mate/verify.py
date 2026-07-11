@@ -149,16 +149,17 @@ def verify_folder(
     now = datetime.now(UTC)
     folder_str = str(folder)
 
-    # Get previous snapshot (path -> checksum)
+    # Get previous baseline and snapshot
+    baseline = store.get_verification_baseline(folder_str)
     prev_rows = store.get_verification_snapshot(folder_str)
     prev: dict[str, str] = {row.path: row.checksum for row in prev_rows}
 
-    # Detect algo mismatch with existing snapshot
-    if prev_rows:
-        existing_algo = prev_rows[0].algo
+    # Detect algo mismatch with existing baseline
+    if baseline:
+        existing_algo = baseline[1]
         if existing_algo != algo.value:
             raise VerifyError(
-                f"existing snapshot uses '{existing_algo}' but config says "
+                f"existing baseline uses '{existing_algo}' but config says "
                 f"'{algo.value}'; clear the snapshot or set config.checksum_algo "
                 f"to '{existing_algo}'"
             )
@@ -167,10 +168,11 @@ def verify_folder(
     new_rows = _snapshot_records(folder, algo, now)
     new: dict[str, str] = {row.path: row.checksum for row in new_rows}
 
-    is_first_run = not prev_rows
+    is_first_run = baseline is None
+    baseline_was_empty = baseline is not None and baseline[0]
+
     if is_first_run:
-        # No prior baseline — every file would look "added", but that's expected.
-        # First verify establishes the baseline; report is clean.
+        # No prior baseline — first verify establishes the baseline; report is clean.
         missing: list[str] = []
         added: list[str] = []
         modified: list[str] = []
@@ -182,17 +184,29 @@ def verify_folder(
         common = prev_paths & new_paths
         modified = sorted(p for p in common if prev[p] != new[p])
 
+        # If the baseline was recorded on an empty folder, any files now present
+        # are genuine additions — not a quirk of snapshot rows not existing.
+        if baseline_was_empty and added:
+            pass  # added files are real; no correction needed
+        # Backwards-compat: if prev_rows is empty but baseline exists (shouldn't
+        # happen with atomic writes, but guard against it), treat all new as added.
+        elif not prev_rows and baseline and not baseline_was_empty:
+            added = sorted(new_paths)
+
     # Persist the new snapshot only when verification is clean, or when
     # the user explicitly acknowledges the new baseline via --accept-changes.
     # On mismatch without acceptance, the baseline is immutable — corruption
     # does not suppress future detections by overwriting the known-good snapshot.
+    is_empty_folder = len(new_rows) == 0
     exit_code = _exit_code(missing=bool(missing), modified=bool(modified), added=bool(added))
     if exit_code == 0 or accept_changes:
-        store.replace_verification_snapshot(folder_str, new_rows)
+        store.replace_verification_snapshot(
+            folder_str, new_rows, is_empty=is_empty_folder, algo=algo.value
+        )
 
     # Log the run
     command = f"media-mate verify {folder}"
-    run_id = store.start_run(command)
+    run_id = store.start_run(command, config_hash=cfg.config_hash())
     store.insert_verification(
         VerificationRecord(
             folder=folder_str,

@@ -446,9 +446,14 @@ class PipelineScreen(Screen[Any]):
                 continue
             item.status = "running"
             self.app.call_from_thread(self._ui, f"[cyan]▶ {item.path}[/]", completed, total)
-            out = options.output_root or item.path.parent / f"{item.path.name}-output"
+            # Each queue item gets its own output tree, even when a shared output_root
+            # is configured. This prevents same-named clips from separate source folders
+            # (e.g. multiple camera cards) from colliding in <root>/organized.
+            out = (options.output_root or item.path.parent) / item.path.name
             organized: Path | None = None
             proxy_dir: Path | None = None
+            organize_ran = False
+            organize_dry = options.dry_run
             try:
                 for step in enabled:
                     if self.cancel_requested:
@@ -467,41 +472,64 @@ class PipelineScreen(Screen[Any]):
                             organized,
                             store,
                             config=cfg,
-                            dry_run=options.dry_run,
+                            dry_run=organize_dry,
                             move=True if options.move else None,
                         )
-                        detail = f"{organize_result.files_moved} ok, {organize_result.files_skipped} skipped"
+                        organize_ran = True
+                        detail = (
+                            f"{organize_result.files_moved} ok, {organize_result.files_skipped} skipped"
+                            + (" [dry-run]" if organize_dry else "")
+                        )
                     elif step == "proxy":
-                        proxy_dir = out / "proxies"
-                        proxy_result = generate_proxies(
-                            organized or item.path, proxy_dir, store, config=cfg
-                        )
-                        detail = f"{len(proxy_result.results)} ok, {len(proxy_result.already_existed) + len(proxy_result.skipped)} skipped, {len(proxy_result.failures)} failed"
+                        # Skip proxy if organize is in the pipeline and was a dry-run —
+                        # there is no organized output to proxy; operating on the source
+                        # folder would proxy raw footage instead of the organized proxy.
+                        if organize_ran and organize_dry:
+                            detail = "skipped — organize was dry-run"
+                        else:
+                            proxy_source: Path = organized if organize_ran else item.path
+                            assert isinstance(proxy_source, Path)
+                            proxy_dir = out / "proxies"
+                            proxy_result = generate_proxies(
+                                proxy_source, proxy_dir, store, config=cfg
+                            )
+                            detail = f"{len(proxy_result.results)} ok, {len(proxy_result.already_existed) + len(proxy_result.skipped)} skipped, {len(proxy_result.failures)} failed"
                     elif step == "resolve":
-                        out.mkdir(parents=True, exist_ok=True)
-                        source = organized or item.path
-                        spec = ResolveProjectSpec(
-                            name=options.project_name or item.path.name,
-                            source_folder=str(source),
-                            output_path=str(out / f"{options.project_name or item.path.name}.drp"),
-                            resolution=cast(Any, options.resolution),
-                            frame_rate=cast(Any, options.frame_rate),
-                            color_space=options.color_space,
-                        )
-                        resolve_result = create_resolve_project(
-                            spec, source, proxy_dir, store, config=cfg
-                        )
-                        detail = f"{resolve_result.bin_count} bins"
+                        # Same guard as proxy: don't resolve from an organize dry-run.
+                        if organize_ran and organize_dry:
+                            detail = "skipped — organize was dry-run"
+                        else:
+                            out.mkdir(parents=True, exist_ok=True)
+                            resolve_source: Path = organized if organize_ran else item.path
+                            assert isinstance(resolve_source, Path)
+                            spec = ResolveProjectSpec(
+                                name=options.project_name or item.path.name,
+                                source_folder=str(resolve_source),
+                                output_path=str(out / f"{options.project_name or item.path.name}.drp"),
+                                resolution=cast(Any, options.resolution),
+                                frame_rate=cast(Any, options.frame_rate),
+                                color_space=options.color_space,
+                            )
+                            resolve_result = create_resolve_project(
+                                spec, resolve_source, proxy_dir, store, config=cfg
+                            )
+                            detail = f"{resolve_result.bin_count} bins"
                     else:
-                        verify_result = verify_folder(
-                            organized or item.path,
-                            store,
-                            config=cfg,
-                            accept_changes=options.accept_changes,
-                        )
-                        detail = f"{verify_result.files_checked} checked" + (
-                            "" if verify_result.is_clean else " — differences"
-                        )
+                        # Skip verify if organize was a dry-run (same reasoning as proxy).
+                        if organize_ran and organize_dry:
+                            detail = "skipped — organize was dry-run"
+                        else:
+                            verify_source: Path = organized if organize_ran else item.path
+                            assert isinstance(verify_source, Path)
+                            verify_result = verify_folder(
+                                verify_source,
+                                store,
+                                config=cfg,
+                                accept_changes=options.accept_changes,
+                            )
+                            detail = f"{verify_result.files_checked} checked" + (
+                                "" if verify_result.is_clean else " — differences"
+                            )
                     completed += 1
                     self.app.call_from_thread(
                         self._ui, f"[green]✓ {step}[/]  {detail}", completed, total

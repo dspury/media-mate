@@ -323,10 +323,11 @@ def create_resolve_project(
     manifest = build_project_manifest(source_folder, spec, proxy_dir_resolved)
 
     command = f"media-mate resolve create {source_folder} --project {spec.name}"
-    run_id = store.start_run(command)
+    run_id = store.start_run(command, config_hash=config.config_hash())
 
     bin_count = len(manifest["bins"])
     timeline_count = 1 if manifest["timeline"]["clips"] else 0
+    manifest_path_val: Path | None = None
     resolve_version: str | None = None
     status = RunStatus.SUCCESS
     error_msg: str | None = None
@@ -341,29 +342,30 @@ def create_resolve_project(
             # Resolve was available but errored — partial success; still write manifest.
             status = RunStatus.PARTIAL
             error_msg = f"Resolve API failed: {e}; falling back to manifest"
+            manifest_path_val = output_path.with_suffix(output_path.suffix + ".manifest.json")
             try:
-                write_manifest(
-                    manifest,
-                    output_path.with_suffix(output_path.suffix + ".manifest.json"),
-                )
+                write_manifest(manifest, manifest_path_val)
             except OSError as we:
                 error_msg = f"{error_msg}; manifest write also failed: {we}"
     else:
         # Resolve not available — write manifest so the user can act later.
+        manifest_path_val = output_path.with_suffix(output_path.suffix + ".manifest.json")
         try:
-            write_manifest(
-                manifest,
-                output_path.with_suffix(output_path.suffix + ".manifest.json"),
-            )
+            write_manifest(manifest, manifest_path_val)
         except OSError as e:
             status = RunStatus.FAILED
             error_msg = f"could not write manifest: {e}"
+
+    # The recorded path is always the actual artifact: .drp when Resolve succeeded,
+    # manifest.json when it didn't. This keeps the audit log honest.
+    recorded_path = str(output_path) if resolve_version else str(manifest_path_val)
 
     # Always record what happened in the audit log.
     store.insert_project(
         ProjectRecord(
             name=spec.name,
-            path=str(output_path),
+            path=recorded_path,
+            manifest_path=str(manifest_path_val) if manifest_path_val else None,
             run_id=run_id,
             resolution=spec.resolution,
             frame_rate=spec.frame_rate,
@@ -378,7 +380,8 @@ def create_resolve_project(
 
     return ResolveProjectResult(
         name=spec.name,
-        path=str(output_path),
+        path=recorded_path,
+        manifest_path=str(manifest_path_val) if manifest_path_val else None,
         resolution=spec.resolution,
         frame_rate=spec.frame_rate,
         color_space=spec.color_space,

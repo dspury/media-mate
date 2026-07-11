@@ -162,12 +162,15 @@ def _ffmpeg_cmd(
         if probe.color_space:
             cmd += ["-colorspace", probe.color_space]
 
-    # Audio: map all audio tracks and preserve bit depth
-    # -map 0:a maps ALL audio streams from input 0
-    cmd += ["-map", "0:a"]
-
-    audio_codec = _audio_codec_for(probe)
-    cmd += ["-c:a", audio_codec]
+    # Audio: map all audio tracks if source has audio; otherwise suppress audio
+    # entirely. Using -map 0:a on a silent video causes ffmpeg to fail with
+    # "No Audio Input" — a common case with screen-recordings and action cams.
+    if probe and probe.audio_channels and probe.audio_channels > 0:
+        cmd += ["-map", "0:a"]
+        audio_codec = _audio_codec_for(probe)
+        cmd += ["-c:a", audio_codec]
+    else:
+        cmd += ["-an"]
 
     # Force CFR on VFR sources (action cams, phone recordings, screen captures).
     # r_frame_rate from ffprobe is the real rate; avg_frame_rate is nominal.
@@ -326,7 +329,7 @@ def generate_proxies(
 
     ffprobe_path = find_ffprobe(cfg)
     command = f"media-mate proxy {source} --out {output_dir}"
-    run_id = store.start_run(command)
+    run_id = store.start_run(command, config_hash=cfg.config_hash())
 
     results: list[ProxyResult] = []
     failures: list[tuple[Path, str]] = []

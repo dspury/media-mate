@@ -11,7 +11,7 @@
 [organize]
 # Template for organized output. Placeholders:
 #   {root} {codec_family} {resolution_bucket} {filename} {ext} {date}
-template = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
+template = "{root}/{source_relpath}/{filename}{ext}"
 
 # What to do when the destination file already exists.
 # Options: skip (default) | overwrite | rename
@@ -22,7 +22,8 @@ on_conflict = "skip"
 # Options: copy (default) | move
 mode = "copy"
 
-# Proxy generation defaults
+# Proxy generation defaults (used by both CLI and TUI)
+[proxy]
 proxy_codec = "ProRes422Proxy"  # ProRes variant
 proxy_height = 1080             # target height (preserves aspect)
 
