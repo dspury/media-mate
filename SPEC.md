@@ -1,8 +1,8 @@
-# media-mate — Spec v0.2.3
+# media-mate — Spec v0.2.4
 
 > **Name:** `media-mate`
 > **Repo location:** `dspury/media-mate`
-> **Version:** 0.2.3
+> **Version:** 0.2.4
 > **Status:** Released — stable
 
 ---
@@ -614,6 +614,35 @@ still pass; a verify-only smoke run completes `done`).
 - **Comprehensive CSS rewrite.** Round borders, panel backgrounds,
   design-token spacing, consistent stat-tile / field-label / button
   styling; the orange primary anchors the brand across all screens.
+
+---
+
+### v0.2.4 — Open-source release hygiene
+
+**Status:** Released.
+
+Release-prep hygiene cut on top of v0.2.3. No code or behavior changes;
+the package, CLI, TUI, and audit log are byte-identical to v0.2.3. All
+292 tests, ruff, and mypy strict still clean.
+
+#### Hygiene
+
+- **Archive relocated.** The frozen `SPEC_v0.2.2.md` (which still
+  references the old internal monorepo layout, a sibling-products
+  catalog, and an internal author line) moved from the repo root into
+  `docs/archive/`. It now sits next to the other archived docs and is
+  covered by the `.gitignore` rule that already excluded that directory.
+  Live `SPEC.md` and `README.md` are unchanged and were already clean.
+- **`.gitignore` tightened.** Added `.venv/`, `.mypy_cache/`,
+  `.ruff_cache/`, `.hypothesis/`, `*.egg-info/`, `dist/`, `build/` so a
+  fresh clone + `pip install -e ".[dev]"` + `git add .` can't accidentally
+  commit a virtualenv or tool cache. The existing `.pytest_cache/` and
+  `__pycache__/` rules were already in place.
+- **Attribution pseudonymized.** The author's real email was dropped from
+  `pyproject.toml`; the author field now reads `name = "Lunar Park"`.
+  The `LICENSE` copyright line was updated to match. The GitHub handle
+  (`dspury`) and repo URL (`github.com/dspury/media-mate`) are unchanged
+  because those are the actual repo location.
 
 ---
 
