@@ -5,22 +5,111 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
 
-> Zero-cost CLI for post-production media ops: probe, organize, generate proxies, build DaVinci Resolve projects, and verify backups.
+> A CLI + interactive TUI for the boring-but-critical infrastructure underneath video post-production: probe camera cards, organize them, generate proxies, spin up a DaVinci Resolve project, and verify backups — every step logged to a local SQLite audit trail.
 
-media-mate is a sharp little tool for the boring-but-critical infrastructure underneath video post-production. Every operation writes to a local SQLite audit log so you can answer *"what happened to my media?"* without guessing.
-
-- **Probe** any media file or folder → structured metadata (codec, resolution, audio, color)
-- **Organize** a folder into a structured layout by codec family and resolution bucket
-- **Generate** ProRes 422 Proxy (or any ProRes variant) for editing
-- **Create** DaVinci Resolve projects programmatically — or fall back to a manifest if Resolve isn't available
-- **Verify** folder integrity with fast checksums (xxhash or sha256) — designed for cron
-- **Orchestrate** all of the above in one command with the `run` pipeline
-
-No API keys. No cloud. No SaaS. Just FFmpeg, your local SQLite, and (optionally) DaVinci Resolve.
+No API keys. No cloud. Just FFmpeg, your local SQLite, and (optionally) DaVinci Resolve.
 
 ---
 
-## See it in action
+## Two ways to use it
+
+**1. The interactive TUI** (the primary interface for most people)
+
+```bash
+media-mate
+```
+
+Launches a full-screen Textual workstation with four screens: **Home** (dashboard), **Pipelines** (browse + queue + watch runs live), **Audit Log** (browse and search run history), and **Settings** (edit and persist config). See [The TUI](#the-tui) below for the full keymap.
+
+**2. The CLI** (for scripts, cron, and quick one-offs)
+
+```bash
+media-mate run ./raw/ --organize --proxy --resolve-project --verify --project-name "Episode-12"
+```
+
+Chains probe → organize → proxy → resolve-project → verify in one call. Each command also runs standalone — see [The CLI](#the-cli).
+
+Prefer scripts and one-liners? Add `--no-tui` to skip the TUI auto-launch and stay in CLI mode:
+
+```bash
+media-mate --no-tui run ./raw/
+```
+
+---
+
+## Quick start
+
+```bash
+# 1. Get the code
+git clone https://github.com/dspury/media-mate.git
+cd media-mate
+
+# 2. Install (use pipx for an isolated install, or pip if you don't have it)
+pipx install .
+#   — or —
+pip install .
+
+# 3. Make sure ffmpeg is on PATH (required)
+brew install ffmpeg         # macOS
+sudo apt install ffmpeg     # Debian/Ubuntu
+
+# 4. Launch the TUI
+media-mate
+```
+
+Want to try it without your own media? Bundled sample footage is in [`examples/`](./examples/):
+
+```bash
+cd examples/
+./run-demo.sh
+```
+
+A full walkthrough with screenshots and audit-log output is in [`examples/WALKTHROUGH.md`](./examples/WALKTHROUGH.md).
+
+---
+
+## The TUI
+
+The TUI is a full-screen Textual workstation. It's keyboard-driven and lives inside your terminal — no browser, no separate window.
+
+| Screen | What it does |
+|---|---|
+| **Home** | Dashboard with ffmpeg version, db path, and stat tiles (total / succeeded / failed / live runs) |
+| **Pipelines** | Browse mounted folders, queue several sources, run all five capability steps, watch progress live |
+| **Audit Log** | Browse and search run history; runs are color-coded by status |
+| **Settings** | Edit and persist proxy codec/height, checksum algorithm, and binary paths |
+
+**Keybindings** (all available without leaving the keyboard):
+
+| Key | Action |
+|---|---|
+| `R` / `L` / `S` | Jump to **P**ipelines / Audit **L**og / **S**ettings from Home |
+| `A` | Add a folder to the queue (in Pipelines) |
+| `Ctrl+R` | Run the queue |
+| `Ctrl+C` | Safely cancel the current run |
+| `/` | Search the audit log |
+| `Ctrl+S` | Save settings |
+| `Q` | Quit |
+
+The TUI is optional — `media-mate --no-tui` keeps you in CLI mode and prints command help.
+
+---
+
+## The CLI
+
+Each capability runs standalone or as part of the `run` pipeline. Step order in `run` is fixed: probe (always) → organize → proxy → resolve-project → verify. Skip any combination you don't need.
+
+| Command | What it does |
+|---|---|
+| `probe` | Run `ffprobe` on every file in a folder; capture codec, resolution, frame rate, color, audio, duration, size, mtime |
+| `organize` | Re-arrange files into a structured layout, preserving the source's folder shape (cards/scenes/takes) |
+| `proxy` | Generate ProRes 422 Proxy (or any ProRes variant) at 1080p via `ffmpeg`; aspect-preserving; skips non-video |
+| `resolve create` | Create a DaVinci Resolve project programmatically; falls back to a JSON manifest if Resolve isn't running |
+| `verify` | Checksum a folder; on rerun, report what changed (added/modified/missing) — designed for cron |
+| `log` | Query the audit log (text or JSON) |
+| `run` | Orchestrate any combination of the above as a pipeline |
+
+Run `media-mate <command> --help` for the full flag list. Example output:
 
 ```
 $ media-mate run ./raw/ --organize --proxy --resolve-project --verify --project-name "Episode-12"
@@ -39,242 +128,63 @@ Step 5: verify
 Done.
 ```
 
-A full walkthrough with screenshots, folder layouts, and audit-log output is in [`examples/WALKTHROUGH.md`](./examples/WALKTHROUGH.md).
-
----
-
-## Why media-mate?
-
-Most post-production tooling is either (a) expensive SaaS, (b) manual point-and-click workflows that don't scale, or (c) one-off scripts glued together. There's no widely-adopted open-source tool that handles the boring-but-critical media-ops layer — probe → organize → proxy → Resolve project → verify — in one composable, logged, reproducible package.
-
-media-mate is built for the operator who runs a small-to-medium video team, doesn't want to write the same five scripts every project, and needs every operation to be auditable.
-
----
-
-## Features
-
-| Command | What it does |
-|---|---|
-| `probe` | Run `ffprobe` on every file in a folder; capture codec, resolution, frame rate, color space, audio, duration, size, mtime. |
-| `organize` | Re-arrange files into a structured layout (default: `<root>/<source_relpath>/<filename><ext>`, preserving card/scene subfolders) based on probe data. |
-| `proxy` | Generate ProRes 422 Proxy (or any ProRes variant) at 1080p via `ffmpeg`. Aspect-preserving; always outputs `.mov`, skips non-video files. |
-| `resolve create` | Programmatically create a DaVinci Resolve project. Falls back to a JSON manifest when Resolve isn't available. |
-| `verify` | Compute checksums for every file in a folder; on subsequent runs, report what changed (added / modified / missing) with structured exit codes. |
-| `log` | Query the audit log: recent runs, with text or JSON output. |
-| `run` | Pipeline orchestration: probe (always) + optional organize/proxy/resolve-project/verify. |
-| `tui` | Compatibility alias for the full-screen workstation (also the no-argument default). |
-
-Every command writes to the audit log so you can trace any operation back to what the filesystem looked like at the time.
-
----
-
-## Installation
-
-### Requirements
-
-- **Python 3.11+** (for `tomllib` stdlib)
-- **FFmpeg** with `ffprobe` on `$PATH` (or pointed at via config)
-- **DaVinci Resolve Studio** (free tier is fine) — only required for the `resolve create` command; everything else works without it
-
-### Install from source
-
-```bash
-git clone https://github.com/dspury/media-mate.git
-cd media-mate
-pip install -e ".[dev]"
-
-media-mate --version
-```
-
-### Install via pip
-
-```bash
-pip install media-mate
-media-mate --version
-```
-
-### Verify the install
-
-```bash
-media-mate --help
-media-mate probe --help
-```
-
-If `media-mate` isn't on your PATH after pip install, check `python -m site --user-site` and make sure it's on PATH, or use `pipx install media-mate` for an isolated install.
-
----
-
-## Usage
-
-### Quick start — try it now
-
-The [`examples/`](./examples/) folder contains a minimal test dataset and a run script so you can see media-mate working immediately, no real media files required.
-
-```bash
-cd examples/
-./run-demo.sh
-```
-
-### `probe`
-
-```bash
-# Probe a single file
-media-mate probe clip.mov
-
-# Probe a folder recursively
-media-mate probe ./raw/
-```
-
-Output:
-
-```
-Probed 5 file(s)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ File                      ┃ Codec ┃ Resolution  ┃ Duration ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ raw/clip.mov              │ h264  │ 1920x1080  │ 60.0s   │
-│ raw/sub/b-roll.mov        │ prores│ 1920x1080  │ 32.5s   │
-│ ...                       │       │            │          │
-└───────────────────────────┴───────┴────────────┴──────────┘
-```
-
-### `organize`
-
-```bash
-media-mate organize ./raw/ --root ./organized/
-```
-
-Requires that the files have already been probed. Files without probe data are skipped (with a clear error message); run `media-mate probe` first.
-
-Sources are **copied** by default — the raw folder is treated as immutable camera media. Pass `--move` to relocate instead.
-
-Default layout: `<root>/<source_relpath>/<filename><ext>` — the source's subfolder structure is preserved under the destination root, mirroring how AEs and DITs think about media (cards/scenes/takes). Customize via `media-mate.toml` (e.g. `{root}/{codec_family}/{resolution_bucket}/{filename}{ext}`).
-
-### `proxy`
-
-```bash
-# Defaults: ProRes 422 Proxy at 1080p
-media-mate proxy ./raw/ --out ./proxies/
-
-# Custom codec + height (configured via media-mate.toml)
-```
-
-The output directory mirrors the source's subpath layout. If a proxy already exists at the output path, it's skipped (no overwrite).
-
-### `resolve create`
-
-```bash
-# Full create with all options
-media-mate resolve create ./raw/ \
-    --project "Episode-12" \
-    --resolution 1080 \
-    --fps 24 \
-    --color-space Rec.709 \
-    --proxy-dir ./proxies/ \
-    --output ~/projects/Episode-12.drp
-```
-
-If DaVinci Resolve is running and the scripting API is available, the project is created live. If not, a manifest file (`Episode-12.drp.manifest.json`) is written describing what would be created — you can manually build the project in Resolve from this manifest.
-
-### `verify`
-
-```bash
-# First run: creates a snapshot
-media-mate verify ./backup/
-
-# Subsequent runs: report what changed since the previous verify
-media-mate verify ./backup/
-echo $?  # 0 = clean, 1 = missing, 2 = modified, 3 = added
-```
-
-Designed for cron:
+### A cron-ready verify
 
 ```cron
 # Every night at 3am, verify the backup drive and alert on any change
 0 3 * * * cd /path/to/workspace && media-mate verify /Volumes/Backup/ || mail -s "Backup alert" me@example.com
 ```
 
-### `log`
-
-```bash
-# Recent runs (text table)
-media-mate log
-
-# Recent runs as JSON
-media-mate log --format json
-
-# Limit count
-media-mate log --limit 5
-```
-
-### `run` (pipeline)
-
-```bash
-# Probe only
-media-mate run ./raw/
-
-# Probe + organize + proxy + resolve-project + verify
-media-mate run ./raw/ \
-    --organize \
-    --proxy \
-    --resolve-project \
-    --verify \
-    --project-name "Episode-12"
-```
-
-Step order is fixed: probe (always) → organize → proxy → resolve-project → verify. Each step is independent; skip any combination you don't need.
-
-### `tui` (interactive TUI)
-
-Launch the full-screen Textual workstation by running media-mate without a subcommand:
-
-```bash
-media-mate
-```
-
-Use `media-mate --no-tui` to remain in CLI mode and print command help.
-`media-mate tui` remains available as a compatibility alias.
-
-The TUI has four screens:
-
-- **Home** — system status: ffmpeg version, db location, run counts
-- **Pipelines** — browse mounted folders, queue several sources, run all five capability steps, and monitor colored results
-- **Audit Log** — browse and search run history, color-coded by status
-- **Settings** — edit and persist proxy codec/height, checksum algo, ffmpeg path, and Resolve path
-
-All screens are keyboard accessible. Press `R`, `L`, or `S` from Home; use
-`A`/`Delete` to edit the queue, `Ctrl+R` to run, `Ctrl+C` to request safe
-cancellation, `/` to search logs, and `Ctrl+S` to save settings.
+Exit codes from `verify`: `0` = clean, `1` = missing, `2` = modified, `3` = added.
 
 ---
 
-## Configuration
+## Installation
 
-Optional. media-mate works with defaults out of the box.
+**Requirements:**
 
-`media-mate.toml` is searched in this order:
-1. `--config <path>` argument or `MEDIA_MATE_CONFIG` env var
-2. `./media-mate.toml` in the current directory
-3. `~/.media-mate/config.toml`
+- **Python 3.11+** (for `tomllib` stdlib)
+- **FFmpeg** with `ffprobe` on `$PATH` (or pointed at via config)
+- **DaVinci Resolve Studio** (free tier is fine) — only required for `resolve create`; everything else works without it
 
-Example `media-mate.toml`:
+**Install:**
+
+```bash
+git clone https://github.com/dspury/media-mate.git
+cd media-mate
+pipx install .                # clean isolated install
+#   — or —
+pip install .                 # into your current environment
+```
+
+**From a working tree (development):**
+
+```bash
+git clone https://github.com/dspury/media-mate.git
+cd media-mate
+pip install -e ".[dev]"
+```
+
+**Verify:**
+
+```bash
+media-mate --version
+media-mate --help
+```
+
+---
+
+## Configuration (optional)
+
+media-mate works with sensible defaults. Drop a `media-mate.toml` in your project root or `~/.media-mate/` to override. Search order: `--config <path>` / `MEDIA_MATE_CONFIG` env var → `./media-mate.toml` → `~/.media-mate/config.toml`.
 
 ```toml
-# Where to find the ffmpeg and ffprobe binaries. If unset, looks on PATH.
-# ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
-# resolve_path = "/Applications/DaVinci Resolve.app"
+# Proxy generation defaults (any ProRes variant)
+proxy_codec = "ProRes422Proxy"
+proxy_height = 1080
 
-# Proxy generation defaults (top-level keys — also accepted in a [proxy] table).
-proxy_codec = "ProRes422Proxy"   # any ProRes variant
-proxy_height = 1080             # target height (aspect preserved)
-
-# Checksum algorithm for verification: xxhash (default, ~10x faster) | sha256
+# Checksum algorithm: xxhash (default, ~10x faster) | sha256
 checksum_algo = "xxhash"
-
-[organize]
-template = "{root}/{source_relpath}/{filename}{ext}"
-on_conflict = "skip"  # skip | overwrite | rename
-mode = "copy"         # copy | move
 ```
 
 See [`media-mate.toml.example`](./media-mate.toml.example) for the full reference.
@@ -285,40 +195,27 @@ See [`media-mate.toml.example`](./media-mate.toml.example) for the full referenc
 
 Every operation writes to `~/.media-mate/media-mate.db` (SQLite). The schema covers runs, files, probes, proxies, projects, verifications, and organize operations.
 
-The audit log answers questions like:
+The log answers questions like:
 
-- "When did this file get probed, and what was the result?"
-- "What got copied during the last organize run?"
-- "When was this Resolve project created, and from what source folder?"
-- "What was the checksum of this file at the last verify?"
+- *"When did this file get probed, and what was the result?"*
+- *"What got copied during the last organize run?"*
+- *"When was this Resolve project created, and from what source folder?"*
+- *"What was the checksum of this file at the last verify?"*
 
-The log is the system of record — you can back it up, copy it between machines, and trust it as the source of truth.
+It's the system of record — back it up, copy it between machines, trust it as ground truth. Query from the TUI's **Audit Log** screen or the CLI:
 
----
-
-## Architecture
-
-See [`SPEC.md`](./SPEC.md) for the full write-up: goals, capabilities, data flow, SQLite schema, and how to extend.
-
-**Stale archived docs** (superseded by SPEC.md) are kept at [`docs/archive/`](./docs/archive/) but excluded from version control via `.gitignore`.
+```bash
+media-mate log            # text table
+media-mate log --format json
+media-mate log --limit 5
+```
 
 ---
 
-## Status
+## Roadmap
 
-**Beta (`0.2.3`).** Versioned per the project's beta scheme: `MAJOR.MINOR.PATCH` where `MAJOR` stays at `0` indefinitely. Patch bumps (0.1.3 → 0.1.4) are autonomous; minor bumps (0.1.3 → 0.2.0) require explicit approval. We do not bump to `1.0.0` without the maintainer's say-so.
+Ideas for future versions (not yet scheduled):
 
-What works in `0.2.3`:
-- All six core capabilities (probe, organize, proxy, resolve, verify, run/log)
-- Interactive Textual TUI (`media-mate tui`) — home, pipeline runner, log browser, settings
-- Local SQLite audit log with full schema
-- Click CLI with --help, --version, --db, --config
-- media-mate.toml configuration with full defaults
-- xxhash and sha256 checksum algorithms
-- Graceful Resolve-API fallback to manifest file
-- 292 tests passing; ruff + mypy strict clean
-
-What's planned for future versions:
 - Scene detection (PySceneDetect)
 - Audio loudness analysis
 - Watch-folder mode
@@ -329,7 +226,7 @@ What's planned for future versions:
 
 ## Contributing
 
-media-mate is open source under the MIT license. Contributions welcome — open an issue or PR on [GitHub](https://github.com/dspury/media-mate).
+Open source under the MIT license. Issues and PRs welcome on [GitHub](https://github.com/dspury/media-mate).
 
 Development setup:
 
@@ -340,21 +237,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run tests
-pytest
-
-# Lint + type-check
-ruff check .
-ruff format --check .
+pytest                # 292 tests
+ruff check . && ruff format --check .
 mypy src
 ```
+
+Full specification: [`SPEC.md`](./SPEC.md). Archived superseded docs: [`docs/archive/`](./docs/archive/).
 
 ---
 
 ## License
 
 MIT — see [`LICENSE`](./LICENSE).
-
----
-
-media-mate is part of the media-mate catalog of free open-source tools. It's designed to be useful on its own and composes nicely with other tools in the catalog.
