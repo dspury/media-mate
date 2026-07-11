@@ -1,8 +1,8 @@
-# media-mate — Spec v0.2.4
+# media-mate — Spec v0.2.3
 
 > **Name:** `media-mate`
 > **Repo location:** `dspury/media-mate`
-> **Version:** 0.2.4
+> **Version:** 0.2.3
 > **Status:** Released — stable
 
 ---
@@ -536,16 +536,18 @@ Closed in v0.2.2: #7 (SAR), #17 (--dry-run), #19 (proxy drops TC/audio), #25 (ed
 
 ---
 
-### v0.2.3 — Code-review remediation + TUI redesign
+### v0.2.3 — Code-review remediation + TUI redesign + release hygiene
 
-**Status:** Released.
+**Status:** Released. Open-source release tag.
 
-Bundles a full external code review (verdict: NEEDS CHANGES) with a TUI
-visual-layer redesign. v0.2.2 landed most code fixes; this release
-finishes them, fixes two regressions v0.2.2 introduced, corrects invalid
-shipped config/docs, adds the regression tests the review flagged as
-missing, and gives the Textual workstation a cohesive branded look
-(see **TUI redesign** below).
+Bundles three workstreams: a full external code review (verdict:
+NEEDS CHANGES), a TUI visual-layer redesign, and open-source release
+hygiene. v0.2.2 landed most code fixes; this release finishes them,
+fixes two regressions v0.2.2 introduced, corrects invalid shipped
+config/docs, adds the regression tests the review flagged as missing,
+gives the Textual workstation a cohesive branded look (see **TUI
+redesign** below), and preps the repo for public release (see
+**Release hygiene** below).
 
 #### Bug fixes
 
@@ -615,17 +617,11 @@ still pass; a verify-only smoke run completes `done`).
   design-token spacing, consistent stat-tile / field-label / button
   styling; the orange primary anchors the brand across all screens.
 
----
+#### Release hygiene
 
-### v0.2.4 — Open-source release hygiene
-
-**Status:** Released.
-
-Release-prep hygiene cut on top of v0.2.3. No code or behavior changes;
-the package, CLI, TUI, and audit log are byte-identical to v0.2.3. All
-292 tests, ruff, and mypy strict still clean.
-
-#### Hygiene
+Open-source release prep. No code or behavior changes; the package,
+CLI, TUI, and audit log are unchanged from the sections above. All 292
+tests, ruff, and mypy strict still clean.
 
 - **Archive relocated.** The frozen `SPEC_v0.2.2.md` (which still
   references the old internal monorepo layout, a sibling-products
