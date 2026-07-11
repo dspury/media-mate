@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Literal, cast
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.theme import Theme
 from textual.widgets import (
@@ -54,12 +54,22 @@ MM_THEME = Theme(
 )
 
 ASCII_LOGO = r"""
- __  __ _____ ____ ___    _      __  __    _  _____ _____
-|  \/  | ____|  _ \_ _|  / \    |  \/  |  / \|_   _| ____|
-| |\/| |  _| | | | | |  / _ \   | |\/| | / _ \ | | |  _|
-| |  | | |___| |_| | | / ___ \  | |  | |/ ___ \| | | |___
-|_|  |_|_____|____/___/_/   \_\ |_|  |_/_/   \_\_| |_____|
+                       ___                             __
+   ____ ___  ___  ____/ (_)___ _      ____ ___  ____ _/ /____
+  / __ `__ \/ _ \/ __  / / __ `/_____/ __ `__ \/ __ `/ __/ _ \
+ / / / / / /  __/ /_/ / / /_/ /_____/ / / / / / /_/ / /_/  __/
+/_/ /_/ /_/\___/\__,_/_/\__,_/     /_/ /_/ /_/\__,_/\__/\___/
 """
+
+STRAP = "INGEST  ·  ORGANIZE  ·  PROXY  ·  RESOLVE  ·  VERIFY"
+TAGLINE = "Zero-cost post-production media ops  ·  every step audited"
+
+_STATUS_GLYPH = {
+    "success": "[green]●[/]",
+    "failed": "[red]●[/]",
+    "running": "[cyan]●[/]",
+    "partial": "[yellow]●[/]",
+}
 
 
 def get_ffmpeg_version() -> str:
@@ -215,20 +225,34 @@ class HomeScreen(Screen[Any]):
     ]
 
     def compose(self) -> ComposeResult:
-        total, success, failed, running = get_run_counts(cast("MediaMateApp", self.app).db_path)
+        app = cast("MediaMateApp", self.app)
+        total, success, failed, running = get_run_counts(app.db_path)
         yield Header()
-        with Container(id="hero"):
-            yield Static(ASCII_LOGO, id="logo")
-            yield Static("INGEST  •  ORGANIZE  •  PROXY  •  VERIFY", id="strap")
+        with Vertical(id="home"):
+            with Container(id="hero"):
+                yield Static(ASCII_LOGO, id="logo")
+                yield Static(STRAP, id="strap")
+                yield Static(TAGLINE, id="tagline")
             with Horizontal(id="home-actions"):
                 yield Button("RUN PIPELINES  [R]", id="pipeline", variant="primary")
                 yield Button("AUDIT LOG  [L]", id="logs")
                 yield Button("SETTINGS  [S]", id="settings")
+            with Horizontal(id="stats-row"):
+                yield Static(
+                    f"[dim]TOTAL RUNS[/]\n[bright_white bold]{total}[/]", classes="stat-tile"
+                )
+                yield Static(f"[dim]SUCCEEDED[/]\n[green bold]{success}[/]", classes="stat-tile")
+                yield Static(f"[dim]FAILED[/]\n[red bold]{failed}[/]", classes="stat-tile")
+                yield Static(f"[dim]LIVE[/]\n[cyan bold]{running}[/]", classes="stat-tile")
             yield Static(
-                f"FFMPEG {get_ffmpeg_version()}   RUNS {total}   [green]OK {success}[/]   [red]FAIL {failed}[/]   [cyan]LIVE {running}[/]",
+                f"[dim]FFMPEG[/] [accent]{get_ffmpeg_version()}[/]"
+                f"   [dim]DB[/] [muted]{app.db_path}[/]",
                 id="system",
             )
         yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#hero", Container).border_title = "media-mate"
 
     def action_pipeline(self) -> None:
         self.app.push_screen("pipeline")
@@ -298,50 +322,69 @@ class PipelineScreen(Screen[Any]):
         yield Header()
         with Horizontal(id="workspace"):
             with Vertical(id="browser-pane"):
-                yield Label("MEDIA BROWSER", classes="section-title")
-                yield Input(value=str(Path.home()), placeholder="Path", id="browser-path")
+                yield Input(
+                    value=str(Path.home()), placeholder="Path to browse…", id="browser-path"
+                )
                 yield DirectoryTree(Path.home(), id="tree")
                 yield Button("ADD FOLDER  [A]", id="add", variant="primary")
             with Vertical(id="run-pane"):
-                yield Label("PIPELINE QUEUE", classes="section-title")
-                yield DataTable(id="queue")
-                with Horizontal(id="steps"):
-                    yield Checkbox("Probe", True, id="probe")
-                    yield Checkbox("Organize", id="organize")
-                    yield Checkbox("Proxy", id="proxy")
-                    yield Checkbox("Resolve", id="resolve")
-                    yield Checkbox("Verify", id="verify")
-                yield Input(placeholder="Output root (default: <source>-output)", id="output-root")
-                with Horizontal(id="pipeline-options"):
-                    yield Checkbox("Move originals", id="move")
-                    yield Checkbox("Dry-run organize", id="dry-run")
-                    yield Checkbox("Accept verify changes", id="accept-changes")
-                with Horizontal(id="resolve-options"):
-                    yield Input(placeholder="Resolve project name", id="project-name")
-                    yield Select(
-                        [("720p", "720"), ("1080p", "1080"), ("4K", "4K")],
-                        value="1080",
-                        id="resolution",
+                with Vertical(id="queue-panel"):
+                    yield DataTable(id="queue")
+                with Vertical(id="config-panel"):
+                    with Horizontal(id="steps"):
+                        yield Checkbox("1 Probe", True, id="probe")
+                        yield Checkbox("2 Organize", id="organize")
+                        yield Checkbox("3 Proxy", id="proxy")
+                        yield Checkbox("4 Resolve", id="resolve")
+                        yield Checkbox("5 Verify", id="verify")
+                    yield Input(
+                        placeholder="Output root  (blank = beside source)",
+                        id="output-root",
                     )
-                    yield Select(
-                        [
-                            (value, value)
-                            for value in ("23.976", "24", "25", "29.97", "30", "50", "59.94", "60")
-                        ],
-                        value="24",
-                        id="frame-rate",
-                    )
-                    yield Input(value="Rec.709", placeholder="Color space", id="color-space")
-                yield ProgressBar(id="progress", show_eta=False)
-                yield Static("IDLE  •  select a folder and press A", id="stats")
-                yield Log(id="activity", max_lines=1000, auto_scroll=True, highlight=True)
-                with Horizontal():
+                    with Horizontal(id="pipeline-options"):
+                        yield Checkbox("Move originals", id="move")
+                        yield Checkbox("Dry-run organize", id="dry-run")
+                        yield Checkbox("Accept verify changes", id="accept-changes")
+                    with Horizontal(id="resolve-options"):
+                        yield Input(placeholder="Resolve project name", id="project-name")
+                        yield Select(
+                            [("720p", "720"), ("1080p", "1080"), ("4K", "4K")],
+                            value="1080",
+                            id="resolution",
+                        )
+                        yield Select(
+                            [
+                                (value, value)
+                                for value in (
+                                    "23.976",
+                                    "24",
+                                    "25",
+                                    "29.97",
+                                    "30",
+                                    "50",
+                                    "59.94",
+                                    "60",
+                                )
+                            ],
+                            value="24",
+                            id="frame-rate",
+                        )
+                        yield Input(value="Rec.709", placeholder="Color space", id="color-space")
+                with Vertical(id="activity-panel"):
+                    yield ProgressBar(id="progress", show_eta=False)
+                    yield Static("IDLE  •  select a folder and press A", id="stats")
+                    yield Log(id="activity", max_lines=1000, auto_scroll=True, highlight=True)
+                with Horizontal(id="run-actions"):
                     yield Button("RUN QUEUE  [Ctrl+R]", id="run", variant="primary")
                     yield Button("REMOVE  [Del]", id="remove")
                     yield Button("BACK  [Esc]", id="back")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#browser-pane", Vertical).border_title = "MEDIA BROWSER"
+        self.query_one("#queue-panel", Vertical).border_title = "QUEUE"
+        self.query_one("#config-panel", Vertical).border_title = "CONFIGURE"
+        self.query_one("#activity-panel", Vertical).border_title = "ACTIVITY"
         table = self.query_one("#queue", DataTable)
         table.cursor_type = "row"
         table.add_columns("#", "Folder", "State")
@@ -570,13 +613,13 @@ class LogScreen(Screen[Any]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Container(id="log-panel"):
-            yield Label("AUDIT LOG", classes="section-title")
+        with Vertical(id="log-panel"):
             yield Input(placeholder="Search command or status…", id="search")
             yield DataTable(id="log-table")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#log-panel", Vertical).border_title = "AUDIT LOG"
         table = self.query_one("#log-table", DataTable)
         table.cursor_type = "row"
         table.zebra_stripes = True
@@ -598,19 +641,25 @@ class LogScreen(Screen[Any]):
         table.clear()
         needle = self.query_one("#search", Input).value.lower()
         app = cast("MediaMateApp", self.app)
+        panel = self.query_one("#log-panel", Vertical)
         if not app.db_path.exists():
+            panel.border_subtitle = "no runs yet"
             return
         with sqlite3.connect(app.db_path) as conn:
             rows = conn.execute(
                 "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 500"
             ).fetchall()
-        colors = {"success": "green", "failed": "red", "running": "cyan", "partial": "yellow"}
+        shown = 0
         for rid, started, status, command in rows:
             if needle and needle not in f"{status} {command}".lower():
                 continue
-            table.add_row(
-                str(rid), started[:19], f"[{colors.get(status, 'yellow')}]{status}[/]", command
-            )
+            # Friendlier timestamp: "2026-07-11T20:00:29…" -> "2026-07-11 20:00:29"
+            when = f"{started[:10]} {started[11:19]}" if len(started) >= 19 else started
+            glyph = _STATUS_GLYPH.get(status, "[yellow]●[/]")
+            table.add_row(str(rid), when, f"{glyph} {status}", command)
+            shown += 1
+        total = len(rows)
+        panel.border_subtitle = f"{shown} shown · {total} total" if needle else f"{total} runs"
 
 
 class SettingsScreen(Screen[Any]):
@@ -618,50 +667,60 @@ class SettingsScreen(Screen[Any]):
         app = cast("MediaMateApp", self.app)
         cfg = load_config(app.config_path)
         yield Header()
-        with Container(id="settings-panel"):
-            yield Label("PROJECT SETTINGS", classes="section-title")
-            yield Label("Proxy codec")
-            yield Select(
-                [(x, x) for x in ("ProRes422Proxy", "ProRes422LT", "ProRes422", "ProRes422HQ")],
-                value=cfg.proxy_codec,
-                id="codec",
-            )
-            yield Label("Proxy height")
-            yield Select(
-                [(f"{x}p", x) for x in (540, 720, 1080, 2160)], value=cfg.proxy_height, id="height"
-            )
-            yield Label("Checksum")
-            yield Select(
-                [("xxHash (fast)", "xxhash"), ("SHA-256", "sha256")],
-                value=cfg.checksum_algo.value,
-                id="checksum",
-            )
-            yield Label("FFmpeg path (blank = PATH)")
-            yield Input(value=cfg.ffmpeg_path or "", id="ffmpeg")
-            yield Label("Resolve path (blank = auto)")
-            yield Input(value=cfg.resolve_path or "", id="resolve-path")
-            yield Label("Organize template")
-            yield Input(value=cfg.organize.template, id="organize-template")
-            with Horizontal(id="organize-options"):
+        with VerticalScroll(id="settings-scroll"), Container(id="settings-panel"):
+            with Vertical(id="proxy-section"):
+                yield Label("Proxy codec", classes="field-label")
                 yield Select(
-                    [
-                        ("Skip conflicts", "skip"),
-                        ("Overwrite conflicts", "overwrite"),
-                        ("Rename conflicts", "rename"),
-                    ],
-                    value=cfg.organize.on_conflict,
-                    id="on-conflict",
+                    [(x, x) for x in ("ProRes422Proxy", "ProRes422LT", "ProRes422", "ProRes422HQ")],
+                    value=cfg.proxy_codec,
+                    id="codec",
                 )
+                yield Label("Proxy height", classes="field-label")
                 yield Select(
-                    [("Copy originals", "copy"), ("Move originals", "move")],
-                    value=cfg.organize.mode,
-                    id="organize-mode",
+                    [(f"{x}p", x) for x in (540, 720, 1080, 2160)],
+                    value=cfg.proxy_height,
+                    id="height",
                 )
-            with Horizontal():
+                yield Label("Checksum", classes="field-label")
+                yield Select(
+                    [("xxHash (fast)", "xxhash"), ("SHA-256", "sha256")],
+                    value=cfg.checksum_algo.value,
+                    id="checksum",
+                )
+            with Vertical(id="organize-section"):
+                yield Label("Organize template", classes="field-label")
+                yield Input(value=cfg.organize.template, id="organize-template")
+                with Horizontal(id="organize-options"):
+                    yield Select(
+                        [
+                            ("Skip conflicts", "skip"),
+                            ("Overwrite conflicts", "overwrite"),
+                            ("Rename conflicts", "rename"),
+                        ],
+                        value=cfg.organize.on_conflict,
+                        id="on-conflict",
+                    )
+                    yield Select(
+                        [("Copy originals", "copy"), ("Move originals", "move")],
+                        value=cfg.organize.mode,
+                        id="organize-mode",
+                    )
+            with Vertical(id="paths-section"):
+                yield Label("FFmpeg path  (blank = PATH)", classes="field-label")
+                yield Input(value=cfg.ffmpeg_path or "", id="ffmpeg")
+                yield Label("Resolve path  (blank = auto)", classes="field-label")
+                yield Input(value=cfg.resolve_path or "", id="resolve-path")
+            with Horizontal(id="settings-actions"):
                 yield Button("SAVE  [Ctrl+S]", id="save", variant="primary")
                 yield Button("BACK", id="back")
             yield Static(f"Writes {config_target(app.config_path)}", id="config-target")
         yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#settings-panel", Container).border_title = "PROJECT SETTINGS"
+        self.query_one("#proxy-section", Vertical).border_title = "PROXY"
+        self.query_one("#organize-section", Vertical).border_title = "ORGANIZE"
+        self.query_one("#paths-section", Vertical).border_title = "PATHS"
 
     BINDINGS: ClassVar = [Binding("ctrl+s", "save", "Save")]
 
@@ -706,18 +765,59 @@ class MediaMateApp(App[Any]):
     SUB_TITLE = f"POST WORKSTATION  /  v{__version__}"
     THEMES: ClassVar = [MM_THEME]
     CSS = """
-    Screen { background: $background; }
-    Header { background: $surface; color: $text; }
+    Screen { background: $background; color: $text; }
+    Header { background: $surface; }
     Footer { background: $surface; }
-    #hero { width: 84; height: auto; align: center middle; margin: 4 0; padding: 2 4; border: tall $primary; background: $panel; align-horizontal: center; }
-    #logo { color: $primary; text-align: center; } #strap { text-align: center; color: $text-muted; margin: 1; }
-    #home-actions { height: 5; align: center middle; } #home-actions Button { margin: 0 1; } #system { text-align: center; border-top: solid $surface-lighten-2; padding-top: 1; }
-    #workspace { height: 1fr; padding: 1; } #browser-pane { width: 38%; border-right: solid $surface-lighten-2; padding: 0 1; } #run-pane { width: 62%; padding: 0 1; }
-    .section-title { color: $primary; text-style: bold; margin-bottom: 1; } #tree { height: 1fr; } #queue { height: 12; } #steps, #pipeline-options, #resolve-options { height: 3; } #progress { margin-top: 1; }
-    #stats { color: $accent; height: 2; } #activity { height: 1fr; border: solid $surface-lighten-2; background: $surface; }
-    #log-panel { margin: 1 3; } #search { width: 60; margin-bottom: 1; } #log-table { height: 1fr; }
-    #settings-panel { width: 70; height: auto; margin: 2 0; padding: 2 4; border: tall $secondary; background: $panel; align-horizontal: center; } #settings-panel Select, #settings-panel Input { margin-bottom: 1; } #organize-options Select { width: 1fr; margin-right: 1; }
-    MessageDialog { align: center middle; background: rgba(0,0,0,0.7); } #dialog { width: 60; height: auto; padding: 2 3; border: tall $error; background: $panel; }
+
+    /* ---- Home dashboard ---- */
+    #home { height: 1fr; align-horizontal: center; padding: 1 2; }
+    #hero { width: 90; padding: 1 4; border: round $primary; background: $panel; align-horizontal: center; }
+    #logo { color: $primary; text-align: center; text-style: bold; }
+    #strap { text-align: center; color: $accent; text-style: bold; margin: 1 0 0 0; }
+    #tagline { text-align: center; color: $text-muted; text-style: italic; }
+    #home-actions { height: 3; align: center middle; margin: 1 0; }
+    #home-actions Button { margin: 0 1; }
+    #stats-row { height: auto; align: center middle; margin: 1 0; }
+    .stat-tile { width: 18; height: 3; border: round $surface-lighten-2; background: $surface; padding: 0 2; text-align: center; margin: 0 1; }
+    #system { text-align: center; color: $text-muted; margin: 1 0 0 0; }
+
+    /* ---- Pipeline workspace ---- */
+    #workspace { height: 1fr; }
+    #browser-pane { width: 34%; height: 1fr; border: round $primary; background: $panel; padding: 0 1; margin: 0 1 0 0; }
+    #browser-pane Input { margin: 0 0 1 0; }
+    #tree { height: 1fr; border: solid $surface-lighten-2; background: $background; }
+    #browser-pane Button { margin: 1 0 0 0; }
+    #run-pane { width: 1fr; height: 1fr; padding: 0 0 0 1; }
+    #queue-panel { height: auto; border: round $surface-lighten-2; background: $panel; padding: 0 1; margin: 0 0 1 0; }
+    #queue { height: 5; }
+    #config-panel { height: auto; border: round $surface-lighten-2; background: $panel; padding: 0 1; margin: 0 0 1 0; }
+    #steps { height: 1; } #steps Checkbox { margin: 0 2 0 0; }
+    #config-panel Input { margin: 1 0; }
+    #pipeline-options { height: 1; } #pipeline-options Checkbox { margin: 0 3 0 0; }
+    #resolve-options { height: 3; } #resolve-options Input, #resolve-options Select { margin: 0 1 0 0; }
+    #activity-panel { height: 1fr; border: round $surface-lighten-2; background: $panel; padding: 0 1; }
+    #progress { margin: 1 0; }
+    #stats { color: $accent; text-style: bold; height: 1; }
+    #activity { height: 1fr; border: solid $surface-lighten-2; background: $background; }
+    #run-actions { height: auto; dock: bottom; padding: 1 0 0 0; } #run-actions Button { margin: 0 1 0 0; }
+
+    /* ---- Logs ---- */
+    #log-panel { height: 1fr; border: round $primary; background: $panel; padding: 0 1; margin: 1 2; }
+    #search { margin: 0 0 1 0; }
+    #log-table { height: 1fr; }
+
+    /* ---- Settings ---- */
+    #settings-scroll { height: 1fr; align-horizontal: center; padding: 1 2; }
+    #settings-panel { width: 80; border: round $secondary; background: $panel; padding: 0 1; }
+    #proxy-section, #organize-section, #paths-section { border: round $surface-lighten-2; background: $surface; padding: 0 1; margin: 0 0 1 0; }
+    .field-label { color: $accent; text-style: bold; margin: 1 0 0 0; }
+    #organize-options { height: auto; } #organize-options Select { width: 1fr; margin: 0 1 0 0; }
+    #settings-actions { height: auto; align-horizontal: center; padding: 1 0; } #settings-actions Button { margin: 0 1; }
+    #config-target { text-align: center; color: $text-muted; margin: 1 0; }
+
+    /* ---- Dialog ---- */
+    MessageDialog { align: center middle; background: $background; }
+    #dialog { width: 64; padding: 1 2; border: round $primary; background: $panel; }
     """
     BINDINGS: ClassVar = [Binding("q", "quit", "Quit"), Binding("escape", "back", "Back")]
     SCREENS: ClassVar = {
