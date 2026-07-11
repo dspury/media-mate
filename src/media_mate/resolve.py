@@ -323,7 +323,7 @@ def create_resolve_project(
     manifest = build_project_manifest(source_folder, spec, proxy_dir_resolved)
 
     command = f"media-mate resolve create {source_folder} --project {spec.name}"
-    run_id = store.start_run(command, config_hash=config.config_hash())
+    run_id = store.start_run(command, config_hash=cfg.config_hash())
 
     bin_count = len(manifest["bins"])
     timeline_count = 1 if manifest["timeline"]["clips"] else 0

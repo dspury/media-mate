@@ -107,6 +107,18 @@ class TestRuns:
     def test_get_run_missing_returns_none(self, store: LogStore) -> None:
         assert store.get_run(99999) is None
 
+    def test_start_run_persists_config_hash(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate proxy ./raw", config_hash="abc123def456")
+        record = store.get_run(run_id)
+        assert record is not None
+        assert record.config_hash == "abc123def456"
+
+    def test_start_run_config_hash_optional(self, store: LogStore) -> None:
+        run_id = store.start_run("media-mate probe ./raw")
+        record = store.get_run(run_id)
+        assert record is not None
+        assert record.config_hash is None
+
 
 class TestFiles:
     def test_upsert_file_creates_new(self, store: LogStore) -> None:

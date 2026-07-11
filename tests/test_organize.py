@@ -495,3 +495,69 @@ class TestOrganizePath:
         assert result.files_moved == 2
         assert (out / "top.mov").exists()
         assert (out / "sub" / "deep.mov").exists()
+
+
+# ---------------------------------------------------------------------------
+# Immutability regression test (review: "copy" must not share the source inode)
+# ---------------------------------------------------------------------------
+
+
+class TestOrganizeCopyImmutability:
+    """The review reproduced this: a same-device organize hard-linked the file,
+    so editing the organized copy corrupted the raw original. A real copy must
+    be a separate inode whose mutation does not touch the source."""
+
+    def test_copy_creates_distinct_inode(self, tmp_path: Path, store_dir: Path) -> None:
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        original = b"ORIGINAL-CARD-MEDIA" * 64
+        clip = src / "a.mov"
+        clip.write_bytes(original)
+        _seed_probe(store, str(clip), codec="h264", height=1080, size=len(original))
+
+        result = organize_path(src, out, store)
+        assert result.files_moved == 1
+
+        dest = out / "a.mov"
+        assert dest.exists()
+        # Distinct inodes => not a hard link.
+        assert clip.stat().st_ino != dest.stat().st_ino
+
+    def test_editing_copy_does_not_corrupt_source(self, tmp_path: Path, store_dir: Path) -> None:
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        original = b"RAW-INTEGRITY-CHECK" * 64
+        clip = src / "a.mov"
+        clip.write_bytes(original)
+        _seed_probe(store, str(clip), codec="h264", height=1080, size=len(original))
+
+        organize_path(src, out, store)
+
+        dest = out / "a.mov"
+        # Mutate the organized "copy" the way an editor would.
+        dest.write_bytes(b"TAMPERED" * 64)
+
+        # The raw card media must be untouched.
+        assert clip.read_bytes() == original
+
+    def test_copy_operation_recorded_in_audit(self, tmp_path: Path, store_dir: Path) -> None:
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        (src / "a.mov").write_bytes(b"x" * 128)
+        _seed_probe(store, str(src / "a.mov"), codec="h264", height=1080, size=128)
+
+        organize_path(src, out, store)
+
+        with sqlite3.connect(store.db_path) as conn:
+            op = conn.execute("SELECT operation FROM organize_ops").fetchone()
+        assert op is not None
+        assert op[0] == "copy"

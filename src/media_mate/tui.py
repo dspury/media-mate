@@ -266,6 +266,20 @@ class PipelineOptions:
     color_space: str
 
 
+def compute_output_tree(output_root: Path | None, item_path: Path) -> Path:
+    """Compute the per-source output tree for a single queue item.
+
+    Each queued source gets its OWN subtree so same-named clips from separate
+    folders (e.g. two camera cards both containing ``clip.MP4``) never collide
+    in a shared ``<root>/organized`` or ``<root>/proxies``. With a shared
+    output_root, card_a's organized output lands at ``<root>/card_a/organized``
+    and card_b's at ``<root>/card_b/organized``. Without a root, each source's
+    tree sits next to the source under its parent.
+    """
+    base = output_root if output_root is not None else item_path.parent
+    return base / item_path.name
+
+
 class PipelineScreen(Screen[Any]):
     BINDINGS: ClassVar = [
         Binding("a", "add", "Add folder"),
@@ -449,7 +463,7 @@ class PipelineScreen(Screen[Any]):
             # Each queue item gets its own output tree, even when a shared output_root
             # is configured. This prevents same-named clips from separate source folders
             # (e.g. multiple camera cards) from colliding in <root>/organized.
-            out = (options.output_root or item.path.parent) / item.path.name
+            out = compute_output_tree(options.output_root, item.path)
             organized: Path | None = None
             proxy_dir: Path | None = None
             organize_ran = False
@@ -487,8 +501,7 @@ class PipelineScreen(Screen[Any]):
                         if organize_ran and organize_dry:
                             detail = "skipped — organize was dry-run"
                         else:
-                            proxy_source: Path = organized if organize_ran else item.path
-                            assert isinstance(proxy_source, Path)
+                            proxy_source: Path = item.path if organized is None else organized
                             proxy_dir = out / "proxies"
                             proxy_result = generate_proxies(
                                 proxy_source, proxy_dir, store, config=cfg
@@ -500,12 +513,13 @@ class PipelineScreen(Screen[Any]):
                             detail = "skipped — organize was dry-run"
                         else:
                             out.mkdir(parents=True, exist_ok=True)
-                            resolve_source: Path = organized if organize_ran else item.path
-                            assert isinstance(resolve_source, Path)
+                            resolve_source: Path = item.path if organized is None else organized
                             spec = ResolveProjectSpec(
                                 name=options.project_name or item.path.name,
                                 source_folder=str(resolve_source),
-                                output_path=str(out / f"{options.project_name or item.path.name}.drp"),
+                                output_path=str(
+                                    out / f"{options.project_name or item.path.name}.drp"
+                                ),
                                 resolution=cast(Any, options.resolution),
                                 frame_rate=cast(Any, options.frame_rate),
                                 color_space=options.color_space,
@@ -519,8 +533,7 @@ class PipelineScreen(Screen[Any]):
                         if organize_ran and organize_dry:
                             detail = "skipped — organize was dry-run"
                         else:
-                            verify_source: Path = organized if organize_ran else item.path
-                            assert isinstance(verify_source, Path)
+                            verify_source: Path = item.path if organized is None else organized
                             verify_result = verify_folder(
                                 verify_source,
                                 store,

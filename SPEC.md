@@ -73,7 +73,7 @@ JSON-serializable, queryable in SQLite.
 
 ### 5.2 Organize
 
-Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Rules live in a config file (`media-mate.toml`) and can be overridden per-project. Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead.
+Auto-organize a folder of media into a structured layout based on configurable rules. Default rule: `<root>/<source_relpath>/<filename><ext>` — the source's subfolder structure is preserved under the destination root (mirrors how DITs think about cards/scenes/takes). Rules live in a config file (`media-mate.toml`) and can be overridden per-project (e.g. `{root}/{codec_family}/{resolution_bucket}/{filename}{ext}`). Sources are copied by default so raw camera media stays untouched; `--move` (or `mode = "move"` in config) relocates instead.
 
 **Note:** `--dry-run` is supported — preview the organization plan before touching any files.
 
@@ -283,7 +283,7 @@ media-mate organize ./raw/ --root ./organized/
 media-mate organize ./raw/ --root ./organized/ --dry-run
 
 # Generate proxies for everything in a folder
-media-mate proxy ./organized/ --codec ProRes422Proxy --height 1080
+media-mate proxy ./organized/ --out ./proxies/
 
 # Create a Resolve project from a folder
 media-mate resolve create ./organized/ --project "Episode-12" --resolution 1080 --fps 24

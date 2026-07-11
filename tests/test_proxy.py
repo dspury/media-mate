@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from media_mate.log import LogStore
-from media_mate.models import MediaMateConfig, ProxyRequest
+from media_mate.models import MediaMateConfig, MediaProbe, ProxyRequest
 from media_mate.proxy import (
     ProxyError,
+    _ffmpeg_cmd,
     _format_errors,
     _profile_for,
     find_ffmpeg,
     generate_proxies,
     generate_proxy,
 )
+
+_has_ffmpeg = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+requires_ffmpeg = pytest.mark.skipif(not _has_ffmpeg, reason="ffmpeg/ffprobe not installed")
 
 # ---------------------------------------------------------------------------
 # find_ffmpeg tests
@@ -535,3 +541,131 @@ class TestGenerateProxies:
             assert row[0] == str(out / "clip.mov")
             assert row[1] == "ProRes422Proxy"
             assert row[2] == 1080
+
+
+# ---------------------------------------------------------------------------
+# Audio-mapping regression tests (review: silent video must not fail)
+# ---------------------------------------------------------------------------
+
+
+class TestFfmpegCmdAudioMap:
+    """The ffmpeg command must use optional-audio mapping so silent video works.
+
+    Review finding: ``-map 0:a`` made ffmpeg fail on sources with no audio
+    stream (screen recordings, action cams). The fix is ``-map 0:a?`` (ffmpeg's
+    optional-audio form) plus an explicit ``-map 0:v:0`` for video.
+    """
+
+    def test_uses_optional_audio_map_not_required(self, tmp_path: Path) -> None:
+        cmd = _ffmpeg_cmd("/ffmpeg", tmp_path / "src.mov", tmp_path / "out.mov", "ProRes422", 1080)
+        assert "-map" in cmd
+        # The audio map must be optional (trailing ?), never a bare required 0:a,
+        # and video must be mapped explicitly. -an must NEVER appear (it would
+        # strip audio on a failed probe of a source that actually has audio).
+        assert "0:a?" in cmd
+        assert "0:v:0" in cmd
+        assert "0:a" not in [a for a in cmd if a == "0:a"]  # no bare required map
+        assert "-an" not in cmd
+
+    def test_no_an_flag_when_probe_absent(self, tmp_path: Path) -> None:
+        """A missing/failed probe must not emit -an (which would strip real audio)."""
+        cmd = _ffmpeg_cmd("/ffmpeg", tmp_path / "src.mov", tmp_path / "out.mov", "ProRes422", 1080)
+        # The old code emitted -an when probe was None — that stripped audio
+        # from sources where ffprobe had simply failed to run.
+        assert "-an" not in cmd
+
+    def test_optional_audio_map_even_when_probe_reports_audio(self, tmp_path: Path) -> None:
+        probe = MediaProbe(path="src.mov", audio_channels=2, audio_bit_depth=16)
+        cmd = _ffmpeg_cmd(
+            "/ffmpeg", tmp_path / "src.mov", tmp_path / "out.mov", "ProRes422", 1080, probe=probe
+        )
+        assert "0:a?" in cmd
+        # PCM codec still chosen from probe bit depth
+        assert "pcm_s16le" in cmd
+
+
+@requires_ffmpeg
+class TestSilentVideoIntegration:
+    """Real ffmpeg: a source with NO audio stream must still produce a proxy.
+
+    This is the regression the review reproduced with a real silent MP4. It
+    cannot be faked by mocking — it exercises the actual ffmpeg invocation.
+    """
+
+    @staticmethod
+    def _make_silent_video(path: Path) -> None:
+        """Create a 1s black 320x240 video with NO audio stream."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=320x240:d=1:r=24",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def test_silent_video_proxies_without_error(self, tmp_path: Path) -> None:
+        src = tmp_path / "silent.mp4"
+        self._make_silent_video(src)
+        # Sanity check the fixture really has no audio.
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(src),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert probe.stdout.strip() == ""
+
+        out = tmp_path / "proxy.mov"
+        ffmpeg_path = shutil.which("ffmpeg")
+        assert ffmpeg_path is not None
+        result = generate_proxy(
+            ProxyRequest(
+                source_path=str(src),
+                output_path=str(out),
+                codec="ProRes422Proxy",
+                target_height=240,
+            ),
+            ffmpeg_path=ffmpeg_path,
+        )
+
+        assert out.is_file()
+        assert out.stat().st_size > 0
+        assert result.height == 240
+        assert result.proxy_path == str(out)
+
+    def test_silent_video_batch_succeeds(self, tmp_path: Path, store_dir: Path) -> None:
+        """generate_proxies over a folder of silent video must not mark it failed."""
+        src = tmp_path / "in"
+        self._make_silent_video(src / "screen.mp4")
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        batch = generate_proxies(src, out, store)
+
+        assert len(batch.failures) == 0, [f.reason for f in batch.failures]
+        assert len(batch.results) == 1
+        assert (out / "screen.mov").is_file()

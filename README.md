@@ -56,7 +56,7 @@ media-mate is built for the operator who runs a small-to-medium video team, does
 | Command | What it does |
 |---|---|
 | `probe` | Run `ffprobe` on every file in a folder; capture codec, resolution, frame rate, color space, audio, duration, size, mtime. |
-| `organize` | Re-arrange files into a structured layout (default: `<root>/<codec_family>/<resolution_bucket>/<filename>`) based on probe data. |
+| `organize` | Re-arrange files into a structured layout (default: `<root>/<source_relpath>/<filename><ext>`, preserving card/scene subfolders) based on probe data. |
 | `proxy` | Generate ProRes 422 Proxy (or any ProRes variant) at 1080p via `ffmpeg`. Aspect-preserving; always outputs `.mov`, skips non-video files. |
 | `resolve create` | Programmatically create a DaVinci Resolve project. Falls back to a JSON manifest when Resolve isn't available. |
 | `verify` | Compute checksums for every file in a folder; on subsequent runs, report what changed (added / modified / missing) with structured exit codes. |
@@ -148,7 +148,7 @@ Requires that the files have already been probed. Files without probe data are s
 
 Sources are **copied** by default — the raw folder is treated as immutable camera media. Pass `--move` to relocate instead.
 
-Default layout: `<root>/<codec_family>/<resolution_bucket>/<filename>`. Customize via `media-mate.toml`.
+Default layout: `<root>/<source_relpath>/<filename><ext>` — the source's subfolder structure is preserved under the destination root, mirroring how AEs and DITs think about media (cards/scenes/takes). Customize via `media-mate.toml` (e.g. `{root}/{codec_family}/{resolution_bucket}/{filename}{ext}`).
 
 ### `proxy`
 
@@ -264,15 +264,17 @@ Example `media-mate.toml`:
 # ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
 # resolve_path = "/Applications/DaVinci Resolve.app"
 
-[organize]
-template = "{root}/{codec_family}/{resolution_bucket}/{filename}{ext}"
-on_conflict = "skip"  # skip | overwrite | rename
+# Proxy generation defaults (top-level keys — also accepted in a [proxy] table).
+proxy_codec = "ProRes422Proxy"   # any ProRes variant
+proxy_height = 1080             # target height (aspect preserved)
 
-proxy_codec = "ProRes422Proxy"
-proxy_height = 1080
-
-# Options: xxhash (default, ~10x faster) | sha256
+# Checksum algorithm for verification: xxhash (default, ~10x faster) | sha256
 checksum_algo = "xxhash"
+
+[organize]
+template = "{root}/{source_relpath}/{filename}{ext}"
+on_conflict = "skip"  # skip | overwrite | rename
+mode = "copy"         # copy | move
 ```
 
 See [`media-mate.toml.example`](./media-mate.toml.example) for the full reference.
@@ -314,7 +316,7 @@ What works in `0.2.2`:
 - media-mate.toml configuration with full defaults
 - xxhash and sha256 checksum algorithms
 - Graceful Resolve-API fallback to manifest file
-- 259 tests passing; ruff + mypy strict clean
+- 292 tests passing; ruff + mypy strict clean
 
 What's planned for future versions:
 - Scene detection (PySceneDetect)

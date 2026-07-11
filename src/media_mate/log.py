@@ -525,7 +525,12 @@ class LogStore:
     # ------------------------------------------------------------------
 
     def replace_verification_snapshot(
-        self, folder: str, entries: list[VerificationSnapshotRecord], *, is_empty: bool = False, algo: str | None = None
+        self,
+        folder: str,
+        entries: list[VerificationSnapshotRecord],
+        *,
+        is_empty: bool = False,
+        algo: str | None = None,
     ) -> None:
         """Replace the entire snapshot for a folder atomically.
 

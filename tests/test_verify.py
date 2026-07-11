@@ -326,7 +326,7 @@ class TestVerifyFolder:
         cfg = MediaMateConfig(checksum_algo=ChecksumAlgo.SHA256)
         with pytest.raises(VerifyError) as exc_info:
             verify_folder(folder, store, config=cfg)
-        assert "existing snapshot" in exc_info.value.args[0]
+        assert "existing baseline" in exc_info.value.args[0]
 
     def test_snapshot_replaces_old_state(self, tmp_path: Path, store_dir: Path) -> None:
         """A mismatch keeps the known-good snapshot until explicitly accepted."""
@@ -453,3 +453,89 @@ class TestSnapshotRecordModel:
         loaded = store.get_verification_snapshot("/data")
         assert len(loaded) == 1
         assert loaded[0].path == "/data/new.mov"
+
+
+# ---------------------------------------------------------------------------
+# Empty-baseline regression test (review: blind spot where trust is needed)
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyBaseline:
+    """The review found that verifying an empty folder wrote no baseline marker,
+    so a file added afterward was silently absorbed as a first-run baseline.
+    The verification_baselines table now records is_empty independently of
+    snapshot rows, so added files are detected."""
+
+    def test_empty_then_add_reports_added(self, tmp_path: Path, store_dir: Path) -> None:
+        folder = tmp_path / "bkup"
+        folder.mkdir()
+        store = _make_store(store_dir)
+
+        # First run on an EMPTY folder — establishes an empty baseline.
+        first = verify_folder(folder, store)
+        assert first.exit_code == 0
+        assert first.is_clean is True
+
+        # A file appears later (the exact review scenario).
+        (folder / "clip.mov").write_bytes(b"arrived after baseline")
+
+        # Must be reported as ADDED, not silently re-baselined as clean.
+        second = verify_folder(folder, store)
+        assert second.files_added == 1
+        assert second.exit_code == 3
+        assert second.is_clean is False
+
+    def test_empty_baseline_is_persisted(self, tmp_path: Path, store_dir: Path) -> None:
+        folder = tmp_path / "bkup"
+        folder.mkdir()
+        store = _make_store(store_dir)
+        verify_folder(folder, store)
+
+        baseline = store.get_verification_baseline(str(folder.resolve()))
+        assert baseline is not None
+        is_empty, algo = baseline
+        assert is_empty is True
+        assert algo == "xxhash"
+
+    def test_nonempty_baseline_marks_not_empty(self, tmp_path: Path, store_dir: Path) -> None:
+        folder = tmp_path / "bkup"
+        folder.mkdir()
+        (folder / "a").write_bytes(b"x")
+        store = _make_store(store_dir)
+        verify_folder(folder, store)
+
+        baseline = store.get_verification_baseline(str(folder.resolve()))
+        assert baseline is not None
+        assert baseline[0] is False  # had files at baseline
+
+
+# ---------------------------------------------------------------------------
+# Audit provenance regression test (review: config_hash never supplied)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigHashProvenance:
+    """The review found runs.config_hash existed in the schema but every
+    capability called start_run() without it, so results could not be tied to
+    the config that produced them. verify_folder must now record a hash."""
+
+    def test_run_records_config_hash(self, tmp_path: Path, store_dir: Path) -> None:
+        folder = tmp_path / "data"
+        folder.mkdir()
+        (folder / "a").write_bytes(b"hello")
+        store = _make_store(store_dir)
+
+        cfg = MediaMateConfig(checksum_algo=ChecksumAlgo.SHA256)
+        verify_folder(folder, store, config=cfg)
+
+        with sqlite3.connect(store.db_path) as conn:
+            row = conn.execute("SELECT config_hash FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        assert row is not None
+        assert row[0] is not None and row[0] != ""
+
+    def test_different_configs_yield_different_hashes(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        a = MediaMateConfig(checksum_algo=ChecksumAlgo.XXHASH)
+        b = MediaMateConfig(checksum_algo=ChecksumAlgo.SHA256)
+        assert a.config_hash() != b.config_hash()

@@ -17,7 +17,6 @@ operation can be reversed in a future release.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from datetime import UTC, datetime

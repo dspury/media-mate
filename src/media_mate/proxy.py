@@ -113,8 +113,9 @@ def _ffmpeg_cmd(
 ) -> list[str]:
     """Build the ffmpeg command for proxy generation.
 
-    Uses probe data to:
-    - Map all audio tracks (not just the first)
+    Audio is mapped with -map 0:a? (ffmpeg's optional-audio form) so silent
+    video sources (screen recordings, action cams) succeed instead of failing
+    with "No Audio Input". Probe data, when available, additionally drives:
     - Preserve timecode via -timecode
     - Pass through color metadata (color_space, color_transfer, color_primaries)
     - Set SAR from source to handle anamorphic footage correctly
@@ -162,15 +163,16 @@ def _ffmpeg_cmd(
         if probe.color_space:
             cmd += ["-colorspace", probe.color_space]
 
-    # Audio: map all audio tracks if source has audio; otherwise suppress audio
-    # entirely. Using -map 0:a on a silent video causes ffmpeg to fail with
-    # "No Audio Input" — a common case with screen-recordings and action cams.
-    if probe and probe.audio_channels and probe.audio_channels > 0:
-        cmd += ["-map", "0:a"]
-        audio_codec = _audio_codec_for(probe)
-        cmd += ["-c:a", audio_codec]
-    else:
-        cmd += ["-an"]
+    # Map the first video stream and any audio tracks. -map 0:a? is the
+    # ffmpeg-recommended form for optional audio: if the source has audio it is
+    # mapped (and re-encoded to PCM below); if the source has none (silent
+    # video — screen recordings, action cams), ffmpeg skips it without error.
+    # This avoids the -map 0:a failure on silent sources AND the opposite bug
+    # where a failed/missing probe (probe=None) would wrongly emit -an and
+    # strip audio that the source actually has.
+    cmd += ["-map", "0:v:0", "-map", "0:a?"]
+    audio_codec = _audio_codec_for(probe)
+    cmd += ["-c:a", audio_codec]
 
     # Force CFR on VFR sources (action cams, phone recordings, screen captures).
     # r_frame_rate from ffprobe is the real rate; avg_frame_rate is nominal.

@@ -38,12 +38,15 @@ def load_config(path: Path | None = None) -> MediaMateConfig:
             with open(candidate, "rb") as f:
                 data = tomllib.load(f)
 
-            # Support [proxy] sub-table in TOML (proxy_codec, proxy_height).
-            # Flatten it into top-level keys so Pydantic can validate it.
-            if "proxy" in data:
+            # Support a [proxy] sub-table in TOML as a convenience for the
+            # proxy settings. Promote recognized keys to the top level (where
+            # the model expects them) and pop the table so Pydantic's
+            # extra="forbid" policy does not reject the leftover key.
+            proxy_sub = data.pop("proxy", None)
+            if isinstance(proxy_sub, dict):
                 for key in ("proxy_codec", "proxy_height"):
-                    if key in data["proxy"]:
-                        data[key] = data["proxy"][key]
+                    if key in proxy_sub:
+                        data.setdefault(key, proxy_sub[key])
 
             return MediaMateConfig.model_validate(data)
 

@@ -2,15 +2,27 @@
 #
 # Copy this file to ./media-mate.toml or ~/.media-mate/config.toml and
 # customize. Any field can be omitted — defaults are shown as comments.
+#
+# proxy_codec / proxy_height / checksum_algo are TOP-LEVEL keys (not under
+# [organize] or [proxy]). media-mate also accepts a [proxy] sub-table holding
+# proxy_codec/proxy_height as a convenience, but top-level is the canonical form.
 
 # Where to find the ffmpeg and ffprobe binaries. If unset, the CLI looks
 # for them on PATH.
 # ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
 # resolve_path = "/Applications/DaVinci Resolve.app"
 
+# Proxy generation defaults (used by the proxy command and the TUI).
+proxy_codec = "ProRes422Proxy"  # ProRes variant
+proxy_height = 1080             # target height (aspect preserved)
+
+# Checksum algorithm for verification.
+# Options: xxhash (default, ~10x faster) | sha256
+checksum_algo = "xxhash"
+
 [organize]
 # Template for organized output. Placeholders:
-#   {root} {codec_family} {resolution_bucket} {filename} {ext} {date}
+#   {root} {codec_family} {resolution_bucket} {filename} {ext} {date} {source_relpath}
 template = "{root}/{source_relpath}/{filename}{ext}"
 
 # What to do when the destination file already exists.
@@ -21,12 +33,3 @@ on_conflict = "skip"
 # folder intact) or moves them.
 # Options: copy (default) | move
 mode = "copy"
-
-# Proxy generation defaults (used by both CLI and TUI)
-[proxy]
-proxy_codec = "ProRes422Proxy"  # ProRes variant
-proxy_height = 1080             # target height (preserves aspect)
-
-# Checksum algorithm for verification
-# Options: xxhash (default, ~10x faster) | sha256
-checksum_algo = "xxhash"
