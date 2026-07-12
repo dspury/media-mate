@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import os
+import platform
 import re
+import shutil
 import sqlite3
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from os import replace
 from pathlib import Path
 from time import monotonic
 from typing import Any, ClassVar, Literal, cast
 
+from rich.markup import escape
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -26,16 +32,20 @@ from textual.widgets import (
     Header,
     Input,
     Label,
-    Log,
+    OptionList,
     ProgressBar,
+    RichLog,
     Select,
     Static,
 )
+from textual.widgets.option_list import Option
+from textual.worker import NoActiveWorker, get_current_worker
 
 from media_mate import __version__
 from media_mate.config import load_config
 from media_mate.log import LogStore
 from media_mate.models import ChecksumAlgo, MediaMateConfig, OrganizeConfig
+from media_mate.probe import SYSTEM_ARTIFACT_NAMES
 
 DEFAULT_DB = Path.home() / ".media-mate" / "media-mate.db"
 
@@ -72,6 +82,98 @@ _STATUS_GLYPH = {
 }
 
 
+def _format_size(num_bytes: int) -> str:
+    """Render a byte count as a short human-readable string (e.g. ``1.2T``)."""
+    scaled = float(num_bytes)
+    for unit in ("B", "K", "M", "G", "T"):
+        if abs(scaled) < 1024:
+            return f"{scaled:0.1f}{unit}"
+        scaled /= 1024
+    return f"{scaled:0.1f}P"
+
+
+def _drive_label(path: Path) -> str:
+    """Best-effort display label for a mount, including free/total space."""
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return path.name or str(path)
+    free = _format_size(usage.free)
+    total = _format_size(usage.total)
+    name = path.name or str(path)
+    return f"{name}  ·  {free} free / {total}"
+
+
+def list_external_drives() -> list[Path]:
+    """Return mount points for connected external / removable volumes.
+
+    Cross-platform:
+      - macOS:   every entry under ``/Volumes/`` except the system volume
+        (detected by realpath resolving to ``/``). This correctly excludes
+        ``Macintosh HD`` while still showing the user's data volume and any
+        attached camera cards, backup disks, or USB sticks.
+      - Linux:   every directory under ``/media/$USER/`` and
+        ``/run/media/$USER/`` (modern GNOME/udisks2), deduplicated by
+        realpath. Fallback to ``/media`` if the user-scoped path is empty.
+      - Windows: every drive letter that exists except ``%SYSTEMDRIVE%``.
+
+    Returned paths are sorted alphabetically for stable display order.
+    """
+    system = platform.system()
+    drives: list[Path] = []
+
+    if system == "Darwin":
+        root_real = Path("/").resolve()
+        volumes = Path("/Volumes")
+        if volumes.is_dir():
+            for child in sorted(volumes.iterdir(), key=lambda p: p.name.lower()):
+                if not child.is_dir():
+                    continue
+                try:
+                    if child.resolve() == root_real:
+                        continue  # skip system volume
+                except OSError:
+                    continue
+                drives.append(child)
+        return drives
+
+    if system == "Linux":
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        bases: list[Path] = []
+        if user:
+            bases.append(Path(f"/media/{user}"))
+            bases.append(Path(f"/run/media/{user}"))
+        bases.append(Path("/media"))
+        seen: set[str] = set()
+        for base in bases:
+            if not base.is_dir():
+                continue
+            for child in sorted(base.iterdir(), key=lambda p: p.name.lower()):
+                if not child.is_dir():
+                    continue
+                try:
+                    real = str(child.resolve())
+                except OSError:
+                    continue
+                if real in seen:
+                    continue
+                seen.add(real)
+                drives.append(child)
+        return drives
+
+    if system == "Windows":
+        system_drive = (os.environ.get("SYSTEMDRIVE") or "C:").rstrip(":").upper()[:1] or "C"
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            if letter == system_drive:
+                continue
+            root = Path(f"{letter}:/")
+            if root.exists() and root.is_dir():
+                drives.append(root)
+        return drives
+
+    return drives
+
+
 def get_ffmpeg_version() -> str:
     try:
         result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
@@ -80,12 +182,40 @@ def get_ffmpeg_version() -> str:
         return "not found"
 
 
+#: Cached ffmpeg version — the subprocess check can take seconds; the Home
+#: screen fetches it once in a background worker and reuses it afterwards.
+_ffmpeg_version: str | None = None
+
+
+def _cached_ffmpeg_version() -> str:
+    global _ffmpeg_version
+    if _ffmpeg_version is None:
+        _ffmpeg_version = get_ffmpeg_version()
+    return _ffmpeg_version
+
+
 def get_run_counts(db: Path) -> tuple[int, int, int, int]:
     if not db.exists():
         return 0, 0, 0, 0
-    with sqlite3.connect(db) as conn:
-        rows = dict(conn.execute("SELECT status, COUNT(*) FROM runs GROUP BY status"))
+    try:
+        with sqlite3.connect(db) as conn:
+            rows = dict(conn.execute("SELECT status, COUNT(*) FROM runs GROUP BY status"))
+    except sqlite3.Error:
+        # A corrupt/foreign db file must not crash the dashboard.
+        return 0, 0, 0, 0
     return sum(rows.values()), rows.get("success", 0), rows.get("failed", 0), rows.get("running", 0)
+
+
+class MediaDirectoryTree(DirectoryTree):
+    """Directory tree that hides OS/system junk (dotfiles, $RECYCLE.BIN, …).
+
+    Camera cards and backup drives are littered with .Trashes, .Spotlight-V100,
+    AppleDouble sidecars and recycle bins; none of them are valid pipeline
+    sources, so the browser doesn't show them.
+    """
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if not (p.name.startswith(".") or p.name in SYSTEM_ARTIFACT_NAMES)]
 
 
 def config_target(explicit: Path | None) -> Path:
@@ -225,8 +355,6 @@ class HomeScreen(Screen[Any]):
     ]
 
     def compose(self) -> ComposeResult:
-        app = cast("MediaMateApp", self.app)
-        total, success, failed, running = get_run_counts(app.db_path)
         yield Header()
         with Vertical(id="home"):
             with Container(id="hero"):
@@ -238,21 +366,48 @@ class HomeScreen(Screen[Any]):
                 yield Button("AUDIT LOG  [L]", id="logs")
                 yield Button("SETTINGS  [S]", id="settings")
             with Horizontal(id="stats-row"):
-                yield Static(
-                    f"[dim]TOTAL RUNS[/]\n[bright_white bold]{total}[/]", classes="stat-tile"
-                )
-                yield Static(f"[dim]SUCCEEDED[/]\n[green bold]{success}[/]", classes="stat-tile")
-                yield Static(f"[dim]FAILED[/]\n[red bold]{failed}[/]", classes="stat-tile")
-                yield Static(f"[dim]LIVE[/]\n[cyan bold]{running}[/]", classes="stat-tile")
-            yield Static(
-                f"[dim]FFMPEG[/] [accent]{get_ffmpeg_version()}[/]"
-                f"   [dim]DB[/] [muted]{app.db_path}[/]",
-                id="system",
-            )
+                yield Static("", id="stat-total", classes="stat-tile")
+                yield Static("", id="stat-success", classes="stat-tile")
+                yield Static("", id="stat-failed", classes="stat-tile")
+                yield Static("", id="stat-live", classes="stat-tile")
+            yield Static("", id="system")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#hero", Container).border_title = "media-mate"
+        self._refresh_stats()
+        # The ffmpeg version check spawns a subprocess (up to 5s on a cold
+        # PATH) — fetch it off the UI thread so startup never blocks.
+        if _ffmpeg_version is None:
+            self.run_worker(self._load_ffmpeg_version, thread=True)
+
+    def on_screen_resume(self) -> None:
+        # Screens are cached by the app; refresh counts when the user returns
+        # from a pipeline run so the dashboard is never stale.
+        self._refresh_stats()
+
+    def _refresh_stats(self) -> None:
+        app = cast("MediaMateApp", self.app)
+        total, success, failed, running = get_run_counts(app.db_path)
+        self.query_one("#stat-total", Static).update(
+            f"[dim]TOTAL RUNS[/]\n[bright_white bold]{total}[/]"
+        )
+        self.query_one("#stat-success", Static).update(
+            f"[dim]SUCCEEDED[/]\n[green bold]{success}[/]"
+        )
+        self.query_one("#stat-failed", Static).update(f"[dim]FAILED[/]\n[red bold]{failed}[/]")
+        self.query_one("#stat-live", Static).update(f"[dim]LIVE[/]\n[cyan bold]{running}[/]")
+        self._update_system_line(_ffmpeg_version or "checking…")
+
+    def _update_system_line(self, ffmpeg_version: str) -> None:
+        app = cast("MediaMateApp", self.app)
+        self.query_one("#system", Static).update(
+            f"[dim]FFMPEG[/] [bold]{ffmpeg_version}[/]   [dim]DB[/] {app.db_path}"
+        )
+
+    def _load_ffmpeg_version(self) -> None:
+        version = _cached_ffmpeg_version()
+        self.app.call_from_thread(self._update_system_line, version)
 
     def action_pipeline(self) -> None:
         self.app.push_screen("pipeline")
@@ -315,6 +470,9 @@ class PipelineScreen(Screen[Any]):
     def __init__(self) -> None:
         super().__init__()
         self.items: list[QueueItem] = []
+        self.drives: list[Path] = []
+        self._drive_labels: list[str] = []
+        self.busy = False
         self.cancel_requested = False
         self.started = 0.0
 
@@ -325,7 +483,9 @@ class PipelineScreen(Screen[Any]):
                 yield Input(
                     value=str(Path.home()), placeholder="Path to browse…", id="browser-path"
                 )
-                yield DirectoryTree(Path.home(), id="tree")
+                yield Static("EXTERNAL DRIVES", id="drives-label", classes="browser-section-label")
+                yield OptionList(id="drives-list")
+                yield MediaDirectoryTree(Path.home(), id="tree")
                 yield Button("ADD FOLDER  [A]", id="add", variant="primary")
             with Vertical(id="run-pane"):
                 with Vertical(id="queue-panel"):
@@ -373,7 +533,9 @@ class PipelineScreen(Screen[Any]):
                 with Vertical(id="activity-panel"):
                     yield ProgressBar(id="progress", show_eta=False)
                     yield Static("IDLE  •  select a folder and press A", id="stats")
-                    yield Log(id="activity", max_lines=1000, auto_scroll=True, highlight=True)
+                    yield RichLog(
+                        id="activity", max_lines=1000, auto_scroll=True, markup=True, wrap=True
+                    )
                 with Horizontal(id="run-actions"):
                     yield Button("RUN QUEUE  [Ctrl+R]", id="run", variant="primary")
                     yield Button("REMOVE  [Del]", id="remove")
@@ -387,7 +549,45 @@ class PipelineScreen(Screen[Any]):
         self.query_one("#activity-panel", Vertical).border_title = "ACTIVITY"
         table = self.query_one("#queue", DataTable)
         table.cursor_type = "row"
-        table.add_columns("#", "Folder", "State")
+        # State before Folder so it stays visible however long the path is.
+        table.add_columns("#", "State", "Folder")
+        self.query_one("#progress", ProgressBar).update(total=1, progress=0)
+        # Drive detection touches disk (mount resolution + free-space stat) and
+        # can stall on spun-down or flaky media — run it off the UI thread, and
+        # re-scan periodically so hot-plugged cards appear without a restart.
+        # The initial scan comes from on_screen_resume, which also fires on the
+        # first push — scanning here too would cancel it (exclusive group).
+        self.set_interval(10.0, self._start_drive_scan)
+
+    def on_screen_resume(self) -> None:
+        self._start_drive_scan()
+
+    def _start_drive_scan(self) -> None:
+        self.run_worker(self._scan_drives, thread=True, exclusive=True, group="drive-scan")
+
+    def _scan_drives(self) -> None:
+        drives = list_external_drives()
+        labels = [_drive_label(d) for d in drives]
+        try:
+            if get_current_worker().is_cancelled:
+                return  # a newer scan superseded this one — drop the stale result
+        except NoActiveWorker:
+            pass
+        self.app.call_from_thread(self._show_drives, drives, labels)
+
+    def _show_drives(self, drives: list[Path], labels: list[str]) -> None:
+        if drives == self.drives and labels == self._drive_labels:
+            return  # unchanged — don't rebuild the list under the user's cursor
+        self.drives = drives
+        self._drive_labels = labels
+        drive_list = self.query_one("#drives-list", OptionList)
+        drive_list.clear_options()
+        drive_list.add_options(
+            Option(Text(label, no_wrap=True, overflow="ellipsis"), id=f"drive-{i}")
+            for i, label in enumerate(labels)
+        )
+        drive_list.display = bool(drives)
+        self.query_one("#drives-label", Static).display = bool(drives)
 
     @on(Input.Submitted, "#browser-path")
     def browse_path(self, event: Input.Submitted) -> None:
@@ -395,7 +595,28 @@ class PipelineScreen(Screen[Any]):
         if path.is_dir():
             self.query_one("#tree", DirectoryTree).path = path
         else:
-            self.app.push_screen(MessageDialog(f"[red]Folder not found:[/]\n{path}"))
+            self.app.push_screen(MessageDialog(f"[red]Folder not found:[/]\n{escape(str(path))}"))
+
+    @on(OptionList.OptionSelected, "#drives-list")
+    def drive_selected(self, event: OptionList.OptionSelected) -> None:
+        """Navigate the tree (and path input) to the clicked external drive."""
+        option_id = event.option.id or ""
+        if not option_id.startswith("drive-"):
+            return
+        try:
+            index = int(option_id.split("-", 1)[1])
+        except ValueError:
+            return
+        if not 0 <= index < len(self.drives):
+            return
+        path = self.drives[index]
+        if not path.is_dir():
+            self.app.push_screen(
+                MessageDialog(f"[red]Drive no longer mounted:[/]\n{escape(str(path))}")
+            )
+            return
+        self.query_one("#browser-path", Input).value = str(path)
+        self.query_one("#tree", DirectoryTree).path = path
 
     @on(DirectoryTree.DirectorySelected)
     def selected(self, event: DirectoryTree.DirectorySelected) -> None:
@@ -404,7 +625,7 @@ class PipelineScreen(Screen[Any]):
     def action_add(self) -> None:
         path = Path(self.query_one("#browser-path", Input).value).expanduser().resolve()
         if not path.is_dir():
-            self.app.push_screen(MessageDialog(f"[red]Not a directory:[/]\n{path}"))
+            self.app.push_screen(MessageDialog(f"[red]Not a directory:[/]\n{escape(str(path))}"))
             return
         if any(item.path == path for item in self.items):
             return
@@ -412,10 +633,22 @@ class PipelineScreen(Screen[Any]):
         self._draw_queue()
 
     def action_remove(self) -> None:
+        if self.busy:
+            self.app.push_screen(
+                MessageDialog("[yellow]Queue is running[/] — cancel it before removing items.")
+            )
+            return
         table = self.query_one("#queue", DataTable)
         if self.items and table.cursor_row is not None:
             self.items.pop(table.cursor_row)
             self._draw_queue()
+
+    @staticmethod
+    def _short_path(path: Path, max_len: int = 48) -> str:
+        text = str(path)
+        if len(text) <= max_len:
+            return text
+        return "…" + text[-(max_len - 1) :]
 
     def _draw_queue(self) -> None:
         table = self.query_one("#queue", DataTable)
@@ -429,7 +662,11 @@ class PipelineScreen(Screen[Any]):
         }
         for i, item in enumerate(self.items, 1):
             table.add_row(
-                str(i), str(item.path), f"[{colors[item.status]}]{item.status.upper()}[/]"
+                str(i),
+                f"[{colors[item.status]}]{item.status.upper()}[/]",
+                # Text, not str: literal rendering — bracketed clip/folder names
+                # must not be parsed as markup.
+                Text(self._short_path(item.path)),
             )
 
     @on(Button.Pressed)
@@ -444,10 +681,8 @@ class PipelineScreen(Screen[Any]):
             self.app.pop_screen()
 
     def action_run(self) -> None:
-        if not self.items or any(i.status == "running" for i in self.items):
+        if self.busy or not self.items:
             return
-        self.cancel_requested = False
-        self.started = monotonic()
         enabled = [
             s
             for s in ("probe", "organize", "proxy", "resolve", "verify")
@@ -467,23 +702,56 @@ class PipelineScreen(Screen[Any]):
             frame_rate=str(self.query_one("#frame-rate", Select).value),
             color_space=self.query_one("#color-space", Input).value.strip() or "Rec.709",
         )
+        self.busy = True
+        self.cancel_requested = False
+        self.started = monotonic()
+        self.query_one("#run", Button).disabled = True
         self.app.run_worker(lambda: self._run_queue(enabled, options), thread=True, exclusive=True)
 
     def action_cancel(self) -> None:
+        if not self.busy:
+            return
         self.cancel_requested = True
-        self.query_one("#activity", Log).write(
-            "[yellow]CANCEL REQUESTED — current capability call will finish safely[/]"
-        )
+        self._log("[yellow]CANCEL REQUESTED — current capability call will finish safely[/]")
+
+    def _cancelled(self) -> bool:
+        """True when the user asked to cancel or the app is shutting the worker down."""
+        if self.cancel_requested:
+            return True
+        try:
+            return get_current_worker().is_cancelled
+        except NoActiveWorker:
+            return False
+
+    def _finish_run(self) -> None:
+        self.busy = False
+        self.query_one("#run", Button).disabled = False
+
+    def _log(self, message: str) -> None:
+        self.query_one("#activity", RichLog).write(message)
 
     def _ui(self, message: str, completed: int, total: int) -> None:
-        self.query_one("#activity", Log).write(message)
+        self._log(message)
         self.query_one("#progress", ProgressBar).update(total=max(total, 1), progress=completed)
         self.query_one("#stats", Static).update(
             f"ACTIVE  •  {completed}/{total} steps  •  elapsed {monotonic() - self.started:0.1f}s"
         )
         self._draw_queue()
 
+    def _log_failure_lines(self, failures: list[str], limit: int = 5) -> None:
+        """Surface per-file failure reasons in the activity log (bounded)."""
+        for line in failures[:limit]:
+            self.app.call_from_thread(self._log, f"[red]    ✗ {escape(line)}[/]")
+        if len(failures) > limit:
+            self.app.call_from_thread(self._log, f"[red]    … {len(failures) - limit} more[/]")
+
     def _run_queue(self, enabled: list[str], options: PipelineOptions) -> None:
+        try:
+            self._run_queue_inner(enabled, options)
+        finally:
+            self.app.call_from_thread(self._finish_run)
+
+    def _run_queue_inner(self, enabled: list[str], options: PipelineOptions) -> None:
         from media_mate.models import ResolveProjectSpec
         from media_mate.organize import organize_path
         from media_mate.probe import probe_path
@@ -492,17 +760,30 @@ class PipelineScreen(Screen[Any]):
         from media_mate.verify import verify_folder
 
         app = cast("MediaMateApp", self.app)
-        store = LogStore(app.db_path)
-        store.initialize()
-        cfg = load_config(app.config_path)
-        total = len(self.items) * len(enabled)
+        try:
+            store = LogStore(app.db_path)
+            store.initialize()
+            cfg = load_config(app.config_path)
+        except Exception as exc:
+            self.app.call_from_thread(
+                self._ui,
+                f"[red]✗ Could not start queue — {type(exc).__name__}: {escape(str(exc))}[/]",
+                0,
+                1,
+            )
+            return
+        # Snapshot: items added/removed mid-run must not shift the live batch.
+        items = list(self.items)
+        total = len(items) * len(enabled)
         completed = 0
-        for item in self.items:
-            if self.cancel_requested:
+        for item in items:
+            if self._cancelled():
                 item.status = "cancelled"
                 continue
             item.status = "running"
-            self.app.call_from_thread(self._ui, f"[cyan]▶ {item.path}[/]", completed, total)
+            self.app.call_from_thread(
+                self._ui, f"[cyan]▶ {escape(str(item.path))}[/]", completed, total
+            )
             # Each queue item gets its own output tree, even when a shared output_root
             # is configured. This prevents same-named clips from separate source folders
             # (e.g. multiple camera cards) from colliding in <root>/organized.
@@ -513,15 +794,43 @@ class PipelineScreen(Screen[Any]):
             organize_dry = options.dry_run
             try:
                 for step in enabled:
-                    if self.cancel_requested:
+                    if self._cancelled():
                         item.status = "cancelled"
                         break
                     self.app.call_from_thread(
-                        self._ui, f"[purple]→ {step.upper()}[/] {item.path.name}", completed, total
+                        self._ui,
+                        f"[purple]→ {step.upper()}[/] {escape(item.path.name)}",
+                        completed,
+                        total,
                     )
                     if step == "probe":
-                        probe_result = probe_path(item.path, store, config=cfg)
-                        detail = f"{len(probe_result)} file(s)"
+                        probe_failures: list[str] = []
+
+                        def on_probe_file(
+                            file: Path, error: str | None, _failures: list[str] = probe_failures
+                        ) -> None:
+                            if error is None:
+                                self.app.call_from_thread(
+                                    self._log, f"[dim]    · {escape(file.name)}[/]"
+                                )
+                            else:
+                                _failures.append(f"{file.name} — {error}")
+
+                        probe_result = probe_path(
+                            item.path, store, config=cfg, on_file=on_probe_file
+                        )
+                        self._log_failure_lines(probe_failures)
+                        if not probe_result:
+                            if probe_failures:
+                                raise RuntimeError(
+                                    f"probe failed for all {len(probe_failures)} file(s)"
+                                )
+                            raise RuntimeError(
+                                "no media files found — is the folder still mounted?"
+                            )
+                        detail = f"{len(probe_result)} ok" + (
+                            f", [red]{len(probe_failures)} failed[/]" if probe_failures else ""
+                        )
                     elif step == "organize":
                         organized = out / "organized"
                         organize_result = organize_path(
@@ -533,6 +842,7 @@ class PipelineScreen(Screen[Any]):
                             move=True if options.move else None,
                         )
                         organize_ran = True
+                        self._log_failure_lines(organize_result.errors)
                         detail = (
                             f"{organize_result.files_moved} ok, {organize_result.files_skipped} skipped"
                             + (" [dry-run]" if organize_dry else "")
@@ -548,6 +858,12 @@ class PipelineScreen(Screen[Any]):
                             proxy_dir = out / "proxies"
                             proxy_result = generate_proxies(
                                 proxy_source, proxy_dir, store, config=cfg
+                            )
+                            self._log_failure_lines(
+                                [
+                                    f"{Path(fail.source_path).name} — {fail.reason}"
+                                    for fail in proxy_result.failures
+                                ]
                             )
                             detail = f"{len(proxy_result.results)} ok, {len(proxy_result.already_existed) + len(proxy_result.skipped)} skipped, {len(proxy_result.failures)} failed"
                     elif step == "resolve":
@@ -583,9 +899,13 @@ class PipelineScreen(Screen[Any]):
                                 config=cfg,
                                 accept_changes=options.accept_changes,
                             )
-                            detail = f"{verify_result.files_checked} checked" + (
-                                "" if verify_result.is_clean else " — differences"
-                            )
+                            detail = f"{verify_result.files_checked} checked"
+                            if not verify_result.is_clean:
+                                detail += (
+                                    f" — [red]{verify_result.files_missing} missing, "
+                                    f"{verify_result.files_modified} modified, "
+                                    f"{verify_result.files_added} added[/]"
+                                )
                     completed += 1
                     self.app.call_from_thread(
                         self._ui, f"[green]✓ {step}[/]  {detail}", completed, total
@@ -596,16 +916,19 @@ class PipelineScreen(Screen[Any]):
                 item.status = "failed"
                 completed += 1
                 self.app.call_from_thread(
-                    self._ui, f"[red]✗ {type(exc).__name__}: {exc}[/]", completed, total
+                    self._ui,
+                    f"[red]✗ {type(exc).__name__}: {escape(str(exc))}[/]",
+                    completed,
+                    total,
                 )
-        self.app.call_from_thread(
-            self._ui,
-            "[bold green]QUEUE COMPLETE[/]"
-            if not self.cancel_requested
-            else "[bold yellow]QUEUE STOPPED[/]",
-            completed,
-            total,
-        )
+        failed = sum(1 for item in items if item.status == "failed")
+        if self._cancelled():
+            summary = "[bold yellow]QUEUE STOPPED[/]"
+        elif failed:
+            summary = f"[bold red]QUEUE COMPLETE — {failed} of {len(items)} folder(s) failed[/]"
+        else:
+            summary = "[bold green]QUEUE COMPLETE[/]"
+        self.app.call_from_thread(self._ui, summary, completed, total)
 
 
 class LogScreen(Screen[Any]):
@@ -624,6 +947,11 @@ class LogScreen(Screen[Any]):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.add_columns("ID", "Started", "Status", "Command")
+        self._refresh()
+
+    def on_screen_resume(self) -> None:
+        # Screens are cached by the app — refresh so runs finished since the
+        # last visit show up without pressing R.
         self._refresh()
 
     def action_search(self) -> None:
@@ -645,10 +973,14 @@ class LogScreen(Screen[Any]):
         if not app.db_path.exists():
             panel.border_subtitle = "no runs yet"
             return
-        with sqlite3.connect(app.db_path) as conn:
-            rows = conn.execute(
-                "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 500"
-            ).fetchall()
+        try:
+            with sqlite3.connect(app.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, started_at, status, command FROM runs ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            panel.border_subtitle = f"db error: {exc}"
+            return
         shown = 0
         for rid, started, status, command in rows:
             if needle and needle not in f"{status} {command}".lower():
@@ -785,16 +1117,28 @@ class MediaMateApp(App[Any]):
     #workspace { height: 1fr; }
     #browser-pane { width: 34%; height: 1fr; border: round $primary; background: $panel; padding: 0 1; margin: 0 1 0 0; }
     #browser-pane Input { margin: 0 0 1 0; }
+    .browser-section-label { color: $accent; text-style: bold; height: 1; margin: 0; }
+    #drives-list { display: none; height: auto; max-height: 6; margin: 0 0 1 0; padding: 0 1; border: solid $surface-lighten-2; background: $background; }
+    #drives-label { display: none; }
+    #drives-list > .option-list--option-highlighted { background: $primary 30%; color: $text; }
     #tree { height: 1fr; border: solid $surface-lighten-2; background: $background; }
     #browser-pane Button { margin: 1 0 0 0; }
     #run-pane { width: 1fr; height: 1fr; padding: 0 0 0 1; }
     #queue-panel { height: auto; border: round $surface-lighten-2; background: $panel; padding: 0 1; margin: 0 0 1 0; }
     #queue { height: 5; }
     #config-panel { height: auto; border: round $surface-lighten-2; background: $panel; padding: 0 1; margin: 0 0 1 0; }
-    #steps { height: 1; } #steps Checkbox { margin: 0 2 0 0; }
+    /* Checkboxes default to a 3-row tall border; compact them to one row so
+       the step and option rows are actually visible. */
+    #config-panel Checkbox { border: none; padding: 0 1; height: 1; background: transparent; }
+    #config-panel Checkbox:focus { background: $primary 20%; text-style: bold; }
+    #steps { height: auto; } #steps Checkbox { margin: 0 1 0 0; }
     #config-panel Input { margin: 1 0; }
-    #pipeline-options { height: 1; } #pipeline-options Checkbox { margin: 0 3 0 0; }
-    #resolve-options { height: 3; } #resolve-options Input, #resolve-options Select { margin: 0 1 0 0; }
+    #pipeline-options { height: auto; } #pipeline-options Checkbox { margin: 0 2 0 0; }
+    /* Inputs default to width 100% — inside a Horizontal that pushes every
+       sibling Select off-screen. Share the row instead. */
+    #resolve-options { height: auto; }
+    #resolve-options Input { width: 1fr; margin: 0 1 0 0; }
+    #resolve-options Select { width: 13; margin: 0 1 0 0; }
     #activity-panel { height: 1fr; border: round $surface-lighten-2; background: $panel; padding: 0 1; }
     #progress { margin: 1 0; }
     #stats { color: $accent; text-style: bold; height: 1; }
@@ -837,9 +1181,35 @@ class MediaMateApp(App[Any]):
         self.theme = MM_THEME.name
         self.push_screen("home")
 
+    def _busy_pipeline(self) -> PipelineScreen | None:
+        """The pipeline screen, if it exists and a queue is currently running."""
+        for screen in self.screen_stack:
+            if isinstance(screen, PipelineScreen) and screen.busy:
+                return screen
+        return None
+
     async def action_back(self) -> None:
+        if isinstance(self.screen, PipelineScreen) and self.screen.busy:
+            self.push_screen(
+                MessageDialog(
+                    "[yellow]Queue is running.[/]\nPress Ctrl+C to cancel it before leaving."
+                )
+            )
+            return
         if len(self.screen_stack) > 1:
             self.pop_screen()
+
+    async def action_quit(self) -> None:
+        # Quitting mid-copy can leave a half-written organize tree or truncated
+        # proxy on disk — require an explicit cancel first.
+        if self._busy_pipeline() is not None:
+            self.push_screen(
+                MessageDialog(
+                    "[yellow]Queue is running.[/]\nPress Ctrl+C to cancel it before quitting."
+                )
+            )
+            return
+        await super().action_quit()
 
 
 def main(db_path: Path = DEFAULT_DB, config_path: Path | None = None) -> None:

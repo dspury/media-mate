@@ -561,3 +561,29 @@ class TestOrganizeCopyImmutability:
             op = conn.execute("SELECT operation FROM organize_ops").fetchone()
         assert op is not None
         assert op[0] == "copy"
+
+
+class TestSystemArtifactExclusion:
+    def test_junk_files_are_not_organized_or_reported(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        """AppleDouble sidecars and .DS_Store never reach the skip list.
+
+        They have no probe data, so before the filter every camera-card run
+        reported them as 'no probe data — run media-mate probe first' noise.
+        """
+        src = tmp_path / "in"
+        src.mkdir()
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        (src / "a.mov").write_bytes(b"x" * 128)
+        (src / "._a.mov").write_bytes(b"appledouble")
+        (src / ".DS_Store").write_bytes(b"junk")
+        _seed_probe(store, str(src / "a.mov"), codec="h264", height=1080, size=128)
+
+        result = organize_path(src, out, store)
+
+        assert result.files_moved == 1
+        assert result.files_skipped == 0
+        assert result.errors == []

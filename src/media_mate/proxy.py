@@ -33,6 +33,7 @@ from media_mate.models import (
     ProxySkip,
     RunStatus,
 )
+from media_mate.probe import is_system_artifact
 
 
 class ProxyError(Exception):
@@ -316,7 +317,14 @@ def generate_proxies(
         # For a single file, the "relative path" is just the filename.
         files: list[tuple[Path, str]] = [(source, source.name)]
     elif source.is_dir():
-        files = [(p, str(p.relative_to(source))) for p in sorted(source.rglob("*")) if p.is_file()]
+        # System artifacts are dropped before the extension check: AppleDouble
+        # sidecars like ._clip.MP4 carry a video suffix but are not video, and
+        # feeding them to ffmpeg fails every camera-card batch.
+        files = [
+            (p, str(p.relative_to(source)))
+            for p in sorted(source.rglob("*"))
+            if p.is_file() and not is_system_artifact(p, source)
+        ]
     else:
         raise ProxyError(source, "not a file or directory")
 

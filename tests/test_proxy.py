@@ -669,3 +669,29 @@ class TestSilentVideoIntegration:
         assert len(batch.failures) == 0, [f.reason for f in batch.failures]
         assert len(batch.results) == 1
         assert (out / "screen.mov").is_file()
+
+
+class TestSystemArtifactExclusion:
+    def test_appledouble_sidecars_never_reach_ffmpeg(self, tmp_path: Path, store_dir: Path) -> None:
+        """._clip.MP4 carries a video suffix but is not video — must be dropped.
+
+        Before the filter, every AppleDouble sidecar on an exFAT camera card
+        was fed to ffmpeg and failed the batch as PARTIAL/FAILED.
+        """
+        src = tmp_path / "in"
+        src.mkdir()
+        (src / "clip.mp4").write_bytes(b"raw")
+        (src / "._clip.mp4").write_bytes(b"appledouble")
+        out = tmp_path / "out"
+        store = _make_store(store_dir)
+
+        with (
+            patch("media_mate.proxy.subprocess.run", side_effect=_fake_successful_ffmpeg),
+            patch("media_mate.proxy._probe_output_metadata") as mock_probe,
+        ):
+            mock_probe.return_value = (1920, 1080, 60.0)
+            batch = generate_proxies(src, out, store)
+
+        assert [Path(r.source_path).name for r in batch.results] == ["clip.mp4"]
+        assert batch.failures == []
+        assert batch.skipped == []

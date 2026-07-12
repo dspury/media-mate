@@ -43,6 +43,7 @@ from media_mate.models import (
     VerificationReport,
     VerificationSnapshotRecord,
 )
+from media_mate.probe import is_system_artifact
 
 _CHUNK_SIZE = 65536  # 64 KB
 
@@ -85,8 +86,15 @@ def compute_checksum(path: Path, algo: ChecksumAlgo = ChecksumAlgo.XXHASH) -> st
 
 
 def _iter_files(folder: Path) -> Iterator[Path]:
-    """Yield all files under folder, recursively, sorted by path."""
-    yield from sorted(p for p in folder.rglob("*") if p.is_file())
+    """Yield all files under folder, recursively, sorted by path.
+
+    System artifacts (.DS_Store, AppleDouble ._* sidecars, $RECYCLE.BIN, …)
+    are excluded: they churn constantly and would otherwise raise false
+    added/modified alarms on every verify of a mounted card or backup drive.
+    """
+    yield from sorted(
+        p for p in folder.rglob("*") if p.is_file() and not is_system_artifact(p, folder)
+    )
 
 
 # ---------------------------------------------------------------------------

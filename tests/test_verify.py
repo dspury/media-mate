@@ -539,3 +539,26 @@ class TestConfigHashProvenance:
         a = MediaMateConfig(checksum_algo=ChecksumAlgo.XXHASH)
         b = MediaMateConfig(checksum_algo=ChecksumAlgo.SHA256)
         assert a.config_hash() != b.config_hash()
+
+
+class TestSystemArtifactExclusion:
+    def test_ds_store_churn_does_not_trip_verification(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        """OS junk appearing between snapshots must not raise added/modified alarms."""
+        folder = tmp_path / "data"
+        folder.mkdir()
+        (folder / "clip.mov").write_bytes(b"payload")
+        store = _make_store(store_dir)
+
+        first = verify_folder(folder, store)
+        assert first.files_checked == 1
+
+        # Finder visits the folder: .DS_Store and an AppleDouble sidecar appear.
+        (folder / ".DS_Store").write_bytes(b"junk")
+        (folder / "._clip.mov").write_bytes(b"appledouble")
+
+        second = verify_folder(folder, store)
+        assert second.files_checked == 1
+        assert second.exit_code == 0
+        assert second.files_added == 0

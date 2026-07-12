@@ -30,6 +30,7 @@ from media_mate.models import (
     OrganizeResult,
     RunStatus,
 )
+from media_mate.probe import is_system_artifact
 
 
 class OrganizeError(Exception):
@@ -241,7 +242,12 @@ def organize_path(
     if not source.is_dir():
         raise OrganizeError(f"source is not a directory: {source}")
 
-    files = sorted(p for p in source.rglob("*") if p.is_file())
+    # System artifacts (.DS_Store, AppleDouble ._* sidecars, $RECYCLE.BIN, …)
+    # are excluded up front — they never have probe data and would otherwise
+    # flood the skip list on every camera-card run.
+    files = sorted(
+        p for p in source.rglob("*") if p.is_file() and not is_system_artifact(p, source)
+    )
 
     # Detect multi-file / spanned clips before organizing (logged as warnings)
     span_warnings: list[str] = []

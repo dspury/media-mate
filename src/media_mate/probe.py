@@ -17,12 +17,43 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from media_mate.log import LogStore
 from media_mate.models import MediaMateConfig, MediaProbe, ProbeRecord, RunStatus
+
+#: Non-dot-prefixed directory/file names that operating systems scatter on
+#: removable media. Dot-prefixed junk (.Trashes, .Spotlight-V100, .DS_Store,
+#: AppleDouble ``._clip.MP4`` sidecars, …) is covered by the leading-dot rule
+#: in is_system_artifact.
+SYSTEM_ARTIFACT_NAMES = frozenset(
+    {
+        "$RECYCLE.BIN",
+        "System Volume Information",
+        "LOST.DIR",
+        "Thumbs.db",
+        "desktop.ini",
+    }
+)
+
+
+def is_system_artifact(path: Path, root: Path) -> bool:
+    """True when ``path`` is OS/index junk rather than user media.
+
+    Judged on the components of ``path`` relative to the scan ``root`` so a
+    scan rooted *inside* a hidden directory still works: only components below
+    the root count. A component is junk when it is dot-prefixed (covers
+    ``.Trashes``, ``.DS_Store``, AppleDouble ``._*`` sidecars that macOS
+    writes on exFAT/FAT camera cards) or a known OS artifact name.
+    """
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return any(part.startswith(".") or part in SYSTEM_ARTIFACT_NAMES for part in parts)
 
 
 class ProbeError(Exception):
@@ -277,12 +308,19 @@ def probe_path(
     path: Path,
     store: LogStore,
     config: MediaMateConfig | None = None,
+    on_file: Callable[[Path, str | None], None] | None = None,
 ) -> list[MediaProbe]:
     """Probe a file or recursively a directory; write results to the audit log.
 
     Returns the list of successful MediaProbe results. Files that fail to probe
     are skipped (with their errors recorded in the run's error field) rather
-    than aborting the whole batch.
+    than aborting the whole batch. System artifacts (dot-prefixed files,
+    AppleDouble sidecars, $RECYCLE.BIN, …) are excluded from directory scans.
+
+    ``on_file`` is an optional progress callback invoked once per file as it
+    finishes: ``on_file(file, None)`` on success, ``on_file(file, reason)`` on
+    failure. Callers (e.g. the TUI) use it for live progress and to surface
+    per-file failures.
 
     Run status:
         - SUCCESS: all files probed successfully
@@ -294,7 +332,9 @@ def probe_path(
     if path.is_file():
         files = [path]
     elif path.is_dir():
-        files = sorted(p for p in path.rglob("*") if p.is_file())
+        files = sorted(
+            p for p in path.rglob("*") if p.is_file() and not is_system_artifact(p, path)
+        )
     else:
         raise ProbeError(path, "not a file or directory")
 
@@ -313,6 +353,8 @@ def probe_path(
         try:
             probe = probe_file(f, ffprobe_path)
             results.append(probe)
+            if on_file is not None:
+                on_file(f, None)
 
             file_id = store.upsert_file(
                 str(f),
@@ -339,6 +381,8 @@ def probe_path(
             )
         except ProbeError as e:
             errors.append((e.path, e.reason))
+            if on_file is not None:
+                on_file(e.path, e.reason)
 
     if not errors:
         status = RunStatus.SUCCESS
@@ -363,8 +407,10 @@ def _format_errors(errors: list[tuple[Path, str]], limit: int = 5) -> str:
 
 
 __all__ = [
+    "SYSTEM_ARTIFACT_NAMES",
     "ProbeError",
     "find_ffprobe",
+    "is_system_artifact",
     "probe_file",
     "probe_path",
 ]

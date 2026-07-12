@@ -475,3 +475,103 @@ class TestProbePath:
         store = _make_store(store_dir)
         with pytest.raises(ProbeError):
             probe_path(tmp_path / "nope", store)
+
+    def test_skips_system_artifacts_on_camera_cards(self, tmp_path: Path, store_dir: Path) -> None:
+        """AppleDouble sidecars, .DS_Store and recycle bins are never probed.
+
+        macOS writes ._clip.MP4 sidecars on exFAT camera cards; ffprobe fails
+        on every one of them, which used to poison probe runs from external
+        drives (reported from the TUI as 'did not probe properly').
+        """
+        (tmp_path / "clip.MP4").write_bytes(b"real")
+        (tmp_path / "._clip.MP4").write_bytes(b"appledouble")
+        (tmp_path / ".DS_Store").write_bytes(b"junk")
+        recycle = tmp_path / "$RECYCLE.BIN"
+        recycle.mkdir()
+        (recycle / "old.mp4").write_bytes(b"deleted")
+        trashes = tmp_path / ".Trashes" / "501"
+        trashes.mkdir(parents=True)
+        (trashes / "gone.mov").write_bytes(b"deleted")
+        store = _make_store(store_dir)
+
+        with patch("media_mate.probe.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(SAMPLE_FFPROBE_VIDEO_AUDIO),
+                stderr="",
+            )
+            results = probe_path(tmp_path, store)
+
+        assert [Path(r.path).name for r in results] == ["clip.MP4"]
+        assert _latest_run_status(store)[0] == "success"
+
+    def test_scan_rooted_inside_hidden_directory_still_works(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        """Only components BELOW the scan root count as junk."""
+        hidden_root = tmp_path / ".staging"
+        hidden_root.mkdir()
+        (hidden_root / "clip.mov").write_bytes(b"real")
+        store = _make_store(store_dir)
+
+        with patch("media_mate.probe.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(SAMPLE_FFPROBE_VIDEO_AUDIO),
+                stderr="",
+            )
+            results = probe_path(hidden_root, store)
+
+        assert len(results) == 1
+
+    def test_on_file_callback_reports_successes_and_failures(
+        self, tmp_path: Path, store_dir: Path
+    ) -> None:
+        (tmp_path / "good.mov").write_bytes(b"good")
+        (tmp_path / "worse.mov").write_bytes(b"worse")
+        store = _make_store(store_dir)
+
+        def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+            target = args[0][-1]
+            if "good" in target:
+                return MagicMock(
+                    returncode=0, stdout=json.dumps(SAMPLE_FFPROBE_VIDEO_AUDIO), stderr=""
+                )
+            return MagicMock(returncode=1, stdout="", stderr="Invalid data")
+
+        seen: list[tuple[str, str | None]] = []
+        with patch("media_mate.probe.subprocess.run", side_effect=fake_run):
+            probe_path(tmp_path, store, on_file=lambda f, err: seen.append((f.name, err)))
+
+        assert ("good.mov", None) in seen
+        failures = [(name, err) for name, err in seen if err is not None]
+        assert len(failures) == 1
+        assert failures[0][0] == "worse.mov"
+        assert "Invalid data" in (failures[0][1] or "")
+
+
+class TestIsSystemArtifact:
+    def test_dot_prefixed_components(self, tmp_path: Path) -> None:
+        from media_mate.probe import is_system_artifact
+
+        assert is_system_artifact(tmp_path / "._clip.MP4", tmp_path)
+        assert is_system_artifact(tmp_path / ".DS_Store", tmp_path)
+        assert is_system_artifact(tmp_path / ".Trashes" / "501" / "x.mov", tmp_path)
+
+    def test_named_artifacts(self, tmp_path: Path) -> None:
+        from media_mate.probe import is_system_artifact
+
+        assert is_system_artifact(tmp_path / "$RECYCLE.BIN" / "x.mp4", tmp_path)
+        assert is_system_artifact(tmp_path / "System Volume Information" / "y", tmp_path)
+        assert is_system_artifact(tmp_path / "Thumbs.db", tmp_path)
+
+    def test_real_media_is_not_junk(self, tmp_path: Path) -> None:
+        from media_mate.probe import is_system_artifact
+
+        assert not is_system_artifact(tmp_path / "CANON R5 — Oct 17" / "C9927.MP4", tmp_path)
+
+    def test_hidden_scan_root_does_not_poison_children(self, tmp_path: Path) -> None:
+        from media_mate.probe import is_system_artifact
+
+        root = tmp_path / ".staging"
+        assert not is_system_artifact(root / "clip.mov", root)
