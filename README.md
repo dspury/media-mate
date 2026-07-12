@@ -1,6 +1,6 @@
 # media-mate
 
-[![Version](https://img.shields.io/badge/version-0.2.3-blue)](https://github.com/dspury/media-mate)
+[![Version](https://img.shields.io/badge/version-0.2.4-blue)](https://github.com/dspury/media-mate)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dspury/media-mate/ci.yml?style=flat-square)](https://github.com/dspury/media-mate/actions/workflows/ci.yml)
@@ -75,7 +75,7 @@ The TUI is a full-screen Textual workstation. It's keyboard-driven and lives ins
 | Screen | What it does |
 |---|---|
 | **Home** | Dashboard with ffmpeg version, db path, and stat tiles (total / succeeded / failed / live runs) |
-| **Pipelines** | Browse mounted folders, queue several sources, run all five capability steps, watch progress live |
+| **Pipelines** | Browse mounted folders, queue several sources, run all five capability steps, watch progress live. The MEDIA BROWSER pane surfaces connected external drives (camera cards, backup disks, USB sticks) at the top — each entry shows name and free/total space, click one to jump the tree straight to it. The drive list refreshes automatically when cards are plugged in or ejected, and system junk (`.Trashes`, `$RECYCLE.BIN`, AppleDouble `._*` sidecars, …) is hidden from the browser and skipped by every pipeline step. |
 | **Audit Log** | Browse and search run history; runs are color-coded by status |
 | **Settings** | Edit and persist proxy codec/height, checksum algorithm, and binary paths |
 

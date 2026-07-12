@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "media-mate"
-version = "0.2.3"
+version = "0.2.4"
 description = "Zero-cost CLI for post-production media ops: probe, organize, generate proxies, build DaVinci Resolve projects, and verify backups."
 readme = "README.md"
 license = { text = "MIT" }

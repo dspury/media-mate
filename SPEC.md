@@ -1,8 +1,8 @@
-# media-mate — Spec v0.2.3
+# media-mate — Spec v0.2.4
 
 > **Name:** `media-mate`
 > **Repo location:** `dspury/media-mate`
-> **Version:** 0.2.3
+> **Version:** 0.2.4
 > **Status:** Released — stable
 
 ---
@@ -55,6 +55,8 @@ The killer demo: drop a folder of raw media in, run `media-mate run`, and walk a
 ---
 
 ## 5. v1 Scope — the six capabilities
+
+**Shared scanning rule — system artifacts are invisible to every capability.** Directory scans (probe, organize, proxy, verify) skip OS/index junk relative to the scan root: any dot-prefixed component (`.DS_Store`, `.Trashes`, `.Spotlight-V100`, AppleDouble `._clip.MP4` sidecars that macOS writes on exFAT/FAT camera cards) plus `$RECYCLE.BIN`, `System Volume Information`, `LOST.DIR`, `Thumbs.db`, and `desktop.ini`. Without this, every run against a mounted camera card or backup drive failed or reported noise: ffprobe/ffmpeg choke on AppleDouble sidecars (which carry real video extensions), organize reports them as un-probed, and verify raises false added/modified alarms whenever Finder touches the folder. A scan explicitly rooted *inside* a hidden directory still works — only components below the root count.
 
 ### 5.1 Probe
 
@@ -385,7 +387,7 @@ through to the TUI.
 | Screen | Purpose |
 |---|---|
 | Home | Studio-style launch surface, ffmpeg health, database run totals |
-| Pipelines | Browse mounted directories, queue multiple folders, select all five capability steps, and monitor sequential execution |
+| Pipelines | Browse mounted directories, queue multiple folders, select all five capability steps, and monitor sequential execution. The MEDIA BROWSER pane auto-detects connected external drives (`/Volumes/*` on macOS minus the system volume, `/media/$USER/*` and `/run/media/$USER/*` on Linux, every drive letter except `%SYSTEMDRIVE%` on Windows) and surfaces them as a clickable list above the directory tree, each entry annotated with free / total disk space. |
 | Audit log | Browse up to 500 runs with colored status and incremental command/status search |
 | Settings | Edit proxy codec/height, checksum algorithm, ffmpeg path, and Resolve path; save the existing TOML schema |
 
@@ -639,6 +641,60 @@ tests, ruff, and mypy strict still clean.
   The `LICENSE` copyright line was updated to match. The GitHub handle
   (`dspury`) and repo URL (`github.com/dspury/media-mate`) are unchanged
   because those are the actual repo location.
+
+---
+
+### v0.2.4 — External-drive reliability + TUI production hardening
+
+**Status:** Released.
+
+Refinement pass driven by a real failure: running a folder from an
+external camera card appeared to "not probe or execute" from the TUI.
+
+#### Bug fixes
+
+- **Activity log was one invisible line.** The `Log` widget's `write()`
+  appends raw text with no newline and no markup rendering, so every
+  message after the first was concatenated onto a single truncated line
+  showing literal `[cyan]` tags. Replaced with `RichLog` (markup,
+  wrapping, real lines). This alone made pipeline failures visible.
+- **System artifacts poisoned every capability on removable media.**
+  Probe fed AppleDouble `._*` sidecars and `.DS_Store` to ffprobe;
+  proxy sent `._clip.MP4` (video suffix, not video) to ffmpeg; organize
+  reported junk as "no probe data" noise; verify raised false
+  added/modified alarms when Finder touched a folder. A shared
+  `is_system_artifact` filter (scan-root-relative) now excludes
+  dot-prefixed components, `$RECYCLE.BIN`, `System Volume Information`,
+  `LOST.DIR`, `Thumbs.db`, `desktop.ini` from all directory scans.
+- **Step checkboxes were invisible.** Checkboxes default to 3 rows tall
+  (tall border) but sat in `height: 1` containers — the CONFIGURE panel
+  showed no steps at all. Compact one-row styling applied.
+- **Resolve option selects were pushed off-screen** by a `width: 100%`
+  Input sharing their row; widths now split the row.
+- **Queue State column could be pushed out of view** by long paths.
+  State now renders before Folder and paths ellipsize from the left.
+- **Bracketed names crashed markup rendering.** Paths, filenames, and
+  error text are now markup-escaped everywhere (`Addtl [B-cam]` etc.).
+
+#### Reliability / responsiveness
+
+- Probe gained an optional per-file `on_file` progress callback; the TUI
+  streams each probed file and lists per-file failure reasons for probe,
+  organize, and proxy (bounded to 5 + count). A probe that yields zero
+  media files now fails the queue item loudly instead of reporting
+  silent success.
+- Drive detection (mount resolution + `disk_usage`) moved off the UI
+  thread with a 10-second refresh — hot-plugged cards appear without a
+  restart, and a spun-down disk can't freeze the interface.
+- The ffmpeg version check (subprocess, up to 5 s) no longer blocks
+  Home-screen startup; Home stats and the Audit Log refresh on screen
+  resume instead of staying stale for the session.
+- Run-state guards: Remove and re-run are blocked while a queue runs;
+  Esc/Q show a "cancel first" dialog instead of abandoning a half-written
+  copy; the run worker snapshots the queue, honors worker cancellation,
+  and always restores the Run button. Corrupt/foreign audit databases
+  degrade gracefully instead of crashing screens.
+- The MEDIA BROWSER directory tree hides dotfiles and system folders.
 
 ---
 
